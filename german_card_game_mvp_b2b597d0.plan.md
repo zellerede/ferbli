@@ -1,0 +1,1 @@
+/home/ber/.cursor/plans/german_card_game_mvp_b2b597d0.plan.md

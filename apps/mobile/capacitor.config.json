@@ -1,0 +1,8 @@
+{
+  "appId": "hu.ferbli.app",
+  "appName": "Ferbli",
+  "webDir": "../web/dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

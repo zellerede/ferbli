@@ -1,0 +1,17 @@
+{
+  "name": "ferbli",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@ferbli/protocol && npm run build --workspace=@ferbli/rules && npm run build --workspace=@ferbli/server && npm run build --workspace=@ferbli/web",
+    "dev": "npm run build --workspace=@ferbli/protocol && npm run build --workspace=@ferbli/rules && concurrently -n server,web -c blue,green \"npm run dev --workspace=@ferbli/server\" \"npm run dev --workspace=@ferbli/web\"",
+    "typecheck": "npm run typecheck -ws --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.2"
+  }
+}

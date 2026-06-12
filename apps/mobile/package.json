@@ -1,0 +1,17 @@
+{
+  "name": "@ferbli/mobile",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "npm run build --workspace=@ferbli/web && cap sync",
+    "sync": "cap sync",
+    "open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.1",
+    "@capacitor/core": "^7.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.1"
+  }
+}

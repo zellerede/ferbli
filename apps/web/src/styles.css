@@ -1,0 +1,96 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #e8eef5;
+  background: #0f141c;
+  line-height: 1.4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
+}
+
+input {
+  font: inherit;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.panel {
+  background: #1a2230;
+  border: 1px solid #2a3548;
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.seat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.seat {
+  border: 1px solid #2a3548;
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: #121a26;
+}
+
+.seat.host {
+  outline: 1px solid #4c6fff55;
+}
+
+.card-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.card {
+  --col: 0;
+  --row: 0;
+  width: 52px;
+  height: 78px;
+  border-radius: 6px;
+  border: 1px solid #2a3548;
+  background-color: #f4f0e6;
+  background-image: url("/cards.webp");
+  background-repeat: no-repeat;
+  background-size: 800% 400%;
+  background-position: calc(var(--col) * 100% / 7) calc(var(--row) * 100% / 3);
+  box-shadow: 0 2px 4px #0003;
+}
+
+.card.back {
+  background-image: none;
+  background: linear-gradient(135deg, #2a3f6b, #1a2230);
+}
+
+.muted {
+  color: #8b98ad;
+  font-size: 0.9rem;
+}
+
+.error {
+  color: #ff8a8a;
+}
