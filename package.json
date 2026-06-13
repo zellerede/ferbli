@@ -11,7 +11,7 @@
     "typecheck": "npm run typecheck -ws --if-present"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2",
+    "concurrently": "^10.0.3",
     "typescript": "^5.7.2"
   }
 }

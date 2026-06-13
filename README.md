@@ -4,7 +4,9 @@ Monorepo for a **German 32-card** table game: shared **TypeScript** rules, **aut
 
 ## Prerequisites
 
-- **Node.js 20+** and **npm** (or use **pnpm** if you restore `pnpm-workspace.yaml` and adjust scripts).
+- **Node.js 20+** and **npm 7+** (Node 20 ships with npm 10). Monorepo scripts use `npm run … --workspace=…`, which needs npm 7+. Local packages are linked with `file:` paths so `npm install` works even when `workspace:*` fails on some setups.
+- Run **`npm install` from the repository root** (the folder that contains this `README.md`). Running install only inside `apps/web` or `packages/*` skips the workspace root and often breaks dependency resolution.
+- Alternatively use **pnpm** if you restore `pnpm-workspace.yaml` and adjust scripts.
 
 ## Quick start
 

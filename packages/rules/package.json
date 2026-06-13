@@ -16,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ferbli/protocol": "workspace:*"
+    "@ferbli/protocol": "file:../protocol"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

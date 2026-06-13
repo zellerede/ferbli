@@ -10,8 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ferbli/protocol": "workspace:*",
-    "@ferbli/rules": "workspace:*",
+    "@ferbli/protocol": "file:../../packages/protocol",
+    "@ferbli/rules": "file:../../packages/rules",
     "@fastify/websocket": "^11.0.2",
     "fastify": "^5.2.0"
   },
