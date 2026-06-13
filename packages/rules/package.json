@@ -13,12 +13,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/score-hand.test.ts"
   },
   "dependencies": {
     "@ferbli/protocol": "file:../protocol"
   },
   "devDependencies": {
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

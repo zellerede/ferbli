@@ -55,6 +55,8 @@ export type PlayerHandSnapshot = {
   cards: CardSlot[];
   /** Still competing for the pot after ante. */
   inRound: boolean;
+  /** During ante: set once the player chose to fold (vs still deciding / not reached yet). */
+  foldedAnte?: boolean;
   /** Shown after showdown for in-round players. */
   score: number | null;
 };
@@ -62,7 +64,7 @@ export type PlayerHandSnapshot = {
 export type RoomSnapshot = {
   protocolVersion: typeof PROTOCOL_VERSION;
   roomCode: string;
-  /** Connection id of the host (can add bots, start hand). */
+  /** Connection id of the host (room admin; e.g. add/remove bots). */
   hostConnectionId: string | null;
   seats: (SeatSnapshot | null)[];
   /** Dealer seat index for current / last hand. */
@@ -75,6 +77,8 @@ export type RoomSnapshot = {
   handSeats: number[];
   /** Whose turn to fold/enter (null if not applicable). */
   actionSeat: number | null;
+  /** Between hands (no activeHand): seat that will deal next; null if fewer than two players with coins. */
+  nextDealerSeat: number | null;
   hands: PlayerHandSnapshot[];
   /** After a hand completes, all cards face-up until the next hand starts. */
   showdownHands: PlayerHandSnapshot[] | null;

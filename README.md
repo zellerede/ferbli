@@ -34,7 +34,7 @@ Build the web bundle with `VITE_WS_URL` pointing at your server, e.g. `ws://127.
 
 - **Deck**: 32 cards — suits *hearts, bells, leaves, acorns*; ranks *ace, king, ober, unter, 10, 9, 8, 7*.
 - **Points**: VII–X = face value; **ace** = 11; **king, ober, unter** = 10 each.
-- **Hand score**: best sum from **2, 3, or 4 cards of the same suit** (take the best of those subset sizes per suit, then the maximum across suits). If no suit has at least two cards, the score is **0**.
+- **Hand score**: best sum from **2, 3, or 4 cards of the same suit** (best subset per suit, then max across suits). If **all four suits differ**, score is the **highest single-card** value. If **no** suit has two or more cards (so that sum does not apply), score is still that **high card** — the lowest card in the deck is **seven** (**7** points), so any **non-empty** hand scores at least **7**; only an **empty** hand scores **0**.
 - **Example**: Herz ace + Herz king + Herz nine + Schelle seven → best Herz triple is ace + king + nine = 11 + 10 + 9 = **30**.
 - **Table**: up to **6 seats** (humans and/or bots). **Dealer** rotates among seated players with coins. **Blind** is the next seat after the dealer in cyclic seat order among players in the hand; the blind **always pays 1 coin** and stays in.
 - **Ante round**: everyone is dealt **4 cards** (2 face-up, 2 face-down). Non-blind players, in turn, **fold** (free) or **enter** (pay **1 coin**). Then all cards are shown and the best score among players still **in the round** wins the **pot**.
@@ -76,3 +76,4 @@ The UI expects **`apps/web/public/cards.webp`**: an **8×4** grid (columns = ran
 | `npm run build` | Builds protocol → rules → server → web in order |
 | `npm run build --workspace=@ferbli/mobile` | After `cap add android`: rebuild web + `cap sync` into `android/` |
 | `npm run typecheck` | Typecheck workspaces that define the script |
+| `npm test` | Runs **`@ferbli/rules`** unit tests (hand scoring, etc.) |

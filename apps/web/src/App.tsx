@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ClientMessage, RoomSnapshot } from "@ferbli/protocol";
+import type { ClientMessage, HandPhase, RoomSnapshot, PlayerHandSnapshot } from "@ferbli/protocol";
 import { PROTOCOL_VERSION } from "@ferbli/protocol";
 import { CardFace } from "./CardFace.js";
 
@@ -21,6 +21,21 @@ function wireDataToStringSync(data: unknown): string {
     );
   }
   return String(data);
+}
+
+/** Status line during / after a hand (ante vs later phases differ). */
+function handRoundLabel(
+  phase: HandPhase,
+  h: PlayerHandSnapshot,
+  actionSeat: number | null,
+): string {
+  if (h.inRound) return "in round";
+  if (phase === "ante") {
+    if (h.foldedAnte) return "folded";
+    if (actionSeat === h.seatIndex) return "to decide";
+    return "waiting";
+  }
+  return "folded";
 }
 
 export function App() {
@@ -178,6 +193,17 @@ export function App() {
     return idx === -1 ? null : idx;
   }, [connectionId, roomState]);
 
+  /** Between hands: next dealer seat, or host when that seat is a bot. */
+  const canDeal = useMemo(() => {
+    if (!connectionId || !roomState || roomState.phase !== "idle") return false;
+    const d = roomState.nextDealerSeat;
+    if (d === null) return false;
+    const seat = roomState.seats[d];
+    if (!seat) return false;
+    if (seat.kind === "bot") return isHost;
+    return seat.connectionId === connectionId;
+  }, [connectionId, roomState, isHost]);
+
   const handsToShow = useMemo(() => {
     if (!roomState) return [];
     if (roomState.hands.length > 0) return roomState.hands;
@@ -249,7 +275,13 @@ export function App() {
               {isHost && <span className="muted"> · You are host</span>}
             </div>
             {mySeat === null ? (
-              <p className="muted">Pick a free seat below.</p>
+              roomState.phase === "idle" ? (
+                <p className="muted">Pick a free seat below.</p>
+              ) : (
+                <p className="muted">
+                  A hand is in progress. You cannot take a seat until it ends.
+                </p>
+              )
             ) : (
               <p className="muted">
                 You are in seat {mySeat + 1}. Coins:{" "}
@@ -296,7 +328,7 @@ export function App() {
                     <div className="muted">Empty</div>
                   )}
                   <div className="row" style={{ marginTop: "0.5rem" }}>
-                    {!seat && (
+                    {!seat && mySeat === null && roomState.phase === "idle" && (
                       <button
                         type="button"
                         onClick={() =>
@@ -310,7 +342,7 @@ export function App() {
                         Sit here
                       </button>
                     )}
-                    {isHost && !seat && (
+                    {isHost && !seat && roomState.phase === "idle" && (
                       <button
                         type="button"
                         onClick={() =>
@@ -320,7 +352,9 @@ export function App() {
                         Add bot
                       </button>
                     )}
-                    {isHost && seat?.kind === "bot" && (
+                    {isHost &&
+                      seat?.kind === "bot" &&
+                      roomState.phase === "idle" && (
                       <button
                         type="button"
                         onClick={() =>
@@ -353,10 +387,10 @@ export function App() {
                 </span>
               )}
             </div>
-            {isHost && (
+            {canDeal && (
               <div className="row" style={{ marginTop: "0.75rem" }}>
                 <button type="button" onClick={() => send({ type: "start_hand" })}>
-                  Start hand
+                  Deal
                 </button>
               </div>
             )}
@@ -380,14 +414,14 @@ export function App() {
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Cards</h2>
             {handsToShow.length === 0 && (
-              <p className="muted">No active hand. Start a hand as host.</p>
+              <p className="muted">No active hand. The dealer presses Deal when ready.</p>
             )}
             {handsToShow.map((h) => (
               <div key={h.seatIndex} style={{ marginBottom: "1rem" }}>
                 <div>
                   <strong>Seat {h.seatIndex + 1}</strong>{" "}
                   <span className="muted">
-                    {h.inRound ? "in round" : "folded"} · score{" "}
+                    {handRoundLabel(roomState.phase, h, roomState.actionSeat)} · score{" "}
                     {h.score ?? "—"}
                   </span>
                 </div>

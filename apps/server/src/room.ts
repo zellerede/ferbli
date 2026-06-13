@@ -28,6 +28,7 @@ type SeatCards = {
   public: [Card, Card];
   private: [Card, Card];
   inRound: boolean;
+  foldedAnte: boolean;
 };
 
 type ActiveHand = {
@@ -157,7 +158,14 @@ export class Room {
                 c.private[1]!,
               ])
             : null;
-        hands.push({ seatIndex: seat, cards, inRound: c.inRound, score });
+        hands.push({
+          seatIndex: seat,
+          cards,
+          inRound: c.inRound,
+          foldedAnte:
+            this.activeHand.phase === "ante" ? c.foldedAnte : undefined,
+          score,
+        });
       }
     }
 
@@ -172,6 +180,7 @@ export class Room {
       pot: this.activeHand?.pot ?? 0,
       handSeats: this.activeHand?.handSeats ?? [],
       actionSeat: this.getActionSeat(),
+      nextDealerSeat: !this.activeHand ? this.peekNextDealerSeat() : null,
       hands,
       showdownHands: this.showdownHands,
       lastMessage: this.lastMessage,
@@ -190,6 +199,28 @@ export class Room {
 
   isHost(connectionId: string): boolean {
     return this.hostConnectionId === connectionId;
+  }
+
+  /** Seat index that will be dealer for the next hand, or null if play cannot start. */
+  peekNextDealerSeat(): number | null {
+    const handSeats: number[] = [];
+    for (let i = 0; i < MAX_SEATS; i++) {
+      const s = this.seats[i];
+      if (s && s.coins >= 1) handSeats.push(i);
+    }
+    if (handSeats.length < 2) return null;
+    return nextDealer(handSeats, this.lastDealerSeat);
+  }
+
+  /** Between hands: human at next dealer seat, or host when the next dealer is a bot. */
+  canDeal(connectionId: string): boolean {
+    if (this.activeHand) return false;
+    const dealerSeat = this.peekNextDealerSeat();
+    if (dealerSeat === null) return false;
+    const seat = this.seats[dealerSeat];
+    if (!seat) return false;
+    if (seat.kind === "bot") return this.isHost(connectionId);
+    return seat.connectionId === connectionId;
   }
 
   handleMessage(connectionId: string, raw: unknown): string | null {
@@ -227,7 +258,7 @@ export class Room {
         return null;
       }
       case "start_hand": {
-        if (!this.isHost(connectionId)) return "Only host can start";
+        if (!this.canDeal(connectionId)) return "Only the dealer can deal";
         const err = this.startHand();
         if (err) return err;
         this.broadcast();
@@ -324,7 +355,12 @@ export class Room {
     for (const seat of handSeats) {
       const pub: [Card, Card] = [deck[k++]!, deck[k++]!];
       const priv: [Card, Card] = [deck[k++]!, deck[k++]!];
-      cards.set(seat, { public: pub, private: priv, inRound: false });
+      cards.set(seat, {
+        public: pub,
+        private: priv,
+        inRound: false,
+        foldedAnte: false,
+      });
     }
 
     const blindSeatData = this.seats[blindSeat];
@@ -382,10 +418,12 @@ export class Room {
 
     if (action === "fold") {
       sc.inRound = false;
+      sc.foldedAnte = true;
     } else {
       if (data.coins < 1) return "Cannot enter: no coins";
       data.coins -= 1;
       sc.inRound = true;
+      sc.foldedAnte = false;
       hand.pot += 1;
     }
     hand.anteIndex += 1;
@@ -446,6 +484,7 @@ export class Room {
         seatIndex: seat,
         cards,
         inRound: c.inRound,
+        foldedAnte: c.foldedAnte ? true : undefined,
         score,
       });
     }
@@ -476,6 +515,7 @@ export class Room {
     let remainder = pot - base * winners.length;
 
     const sortedWinners = [...winners].sort((a, b) => a.seat - b.seat);
+    const winnerNames = sortedWinners.map((w) => this.seats[w.seat]?.displayName);
     for (const w of sortedWinners) {
       const add = base + (remainder > 0 ? 1 : 0);
       if (remainder > 0) remainder -= 1;
@@ -483,7 +523,7 @@ export class Room {
       if (pl) pl.coins += add;
     }
 
-    this.lastMessage = `Showdown: winners seats ${sortedWinners.map((w) => w.seat + 1).join(", ")} with ${best} pts. Pot ${pot} split.`;
+    this.lastMessage = `Showdown: winner is ${winnerNames.join(", ")} with ${best} pts. Pot ${pot} is taken.`;
     this.activeHand = null;
     this.phase = "idle";
   }

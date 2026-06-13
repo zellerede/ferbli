@@ -82,6 +82,10 @@ export async function buildServer() {
         rooms.set(code, r);
         room = r;
         r.addConnection(connectionId, send);
+        const seatErr = r.claimSeat(connectionId, 0, msg.displayName);
+        if (seatErr) {
+          log.warn({ seatErr, connectionId }, "host auto-seat at 1 failed");
+        }
         r.broadcast();
         return;
       }

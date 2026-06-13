@@ -61,10 +61,22 @@ export function cardPoints(card: Card): number {
 }
 
 /**
- * Best score from 2–4 cards of the same suit: take the maximum sum of the
- * top k point values in any suit for k ∈ {2,3,4}. If no suit has ≥2 cards, 0.
+ * Best hand score:
+ * - **Four cards, four suits:** highest single-card point value.
+ * - **Otherwise:** best sum from **2–4 cards of the same suit** (per suit, then max
+ *   across suits). If no suit has at least two cards, the score is the **high card**
+ * — `max(cardPoints)` (never below **7** for a non-empty hand in this deck).
  */
 export function scoreHand(cards: Card[]): number {
+  if (cards.length === 0) return 0;
+
+  if (cards.length === 4) {
+    const suits = new Set(cards.map((c) => c.suit));
+    if (suits.size === 4) {
+      return Math.max(...cards.map(cardPoints));
+    }
+  }
+
   const bySuit = new Map<Suit, Card[]>();
   for (const s of SUITS) bySuit.set(s, []);
   for (const c of cards) {
@@ -82,7 +94,8 @@ export function scoreHand(cards: Card[]): number {
       }
     }
   }
-  return best;
+  if (best > 0) return best;
+  return Math.max(...cards.map(cardPoints));
 }
 
 export type AnteAction = "fold" | "enter";
