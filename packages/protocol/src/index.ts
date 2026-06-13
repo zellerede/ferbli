@@ -63,6 +63,7 @@ export type PlayerHandSnapshot = {
 
 /** One row for the lobby browser (open rooms). */
 export type LobbyRoomSummary = {
+  /** Lowercase quasi-random slug (e.g. `calm_otter`). */
   roomCode: string;
   /** Seated humans in seat order (left to right). */
   humanNames: string[];
@@ -70,6 +71,7 @@ export type LobbyRoomSummary = {
 
 export type RoomSnapshot = {
   protocolVersion: typeof PROTOCOL_VERSION;
+  /** Lowercase quasi-random slug (e.g. `calm_otter`). */
   roomCode: string;
   /** Connection id of the host (room admin; e.g. add/remove bots). */
   hostConnectionId: string | null;

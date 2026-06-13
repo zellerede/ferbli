@@ -38,7 +38,8 @@ function handRoundLabel(
   if (h.inRound) return "in round";
   if (phase === "ante") {
     if (h.foldedAnte) return "folded";
-    return "to decide";
+    if (blindSeat !== null && h.seatIndex !== blindSeat) return "to decide";
+    return "waiting";
   }
   return "folded";
 }
@@ -417,9 +418,17 @@ export function App() {
           </div>
           <div className="row" style={{ marginTop: "0.75rem" }}>
             <input
-              placeholder="Room code"
+              placeholder="e.g. calm_otter"
               value={joinCode}
-              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+              onChange={(e) =>
+                setJoinCode(
+                  e.target.value
+                    .trimStart()
+                    .toLowerCase()
+                    .replace(/\s+/g, "_")
+                    .replace(/-+/g, "_"),
+                )
+              }
             />
             <button
               type="button"

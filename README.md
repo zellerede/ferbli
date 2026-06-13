@@ -30,6 +30,8 @@ npx --yes serve apps/web/dist -p 4173
 
 Build the web bundle with `VITE_WS_URL` pointing at your server, e.g. `ws://127.0.0.1:3333/ws`.
 
+**Rooms**: Creating a room assigns a **lowercase** two-word code (Docker-style, e.g. `bright_heron`). Join by typing that id (spaces or hyphens are normalized to underscores).
+
 ## Rules (Milestone 1)
 
 - **Deck**: 32 cards — suits *hearts, bells, leaves, acorns*; ranks *ace, king, ober, unter, 10, 9, 8, 7*.

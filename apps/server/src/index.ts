@@ -1,26 +1,34 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import type { ClientMessage, LobbyRoomSummary } from "@ferbli/protocol";
 import type { SendFn } from "./room.js";
 import { Room } from "./room.js";
+import { randomRoomSlug } from "./room-names.js";
 
 type WsRawMessage = string | Buffer | ArrayBuffer | Buffer[];
 
 const rooms = new Map<string, Room>();
 
-function newRoomCode(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  const bytes = randomBytes(8);
-  for (let i = 0; i < 6; i++) {
-    out += alphabet[bytes[i]! % alphabet.length]!;
+function allocateNewRoomCode(): string {
+  for (let i = 0; i < 120; i++) {
+    const code = randomRoomSlug();
+    if (!rooms.has(code)) return code;
   }
-  return out;
+  for (let i = 0; i < 40; i++) {
+    const code = `${randomRoomSlug()}_${randomInt(100, 999)}`;
+    if (!rooms.has(code)) return code;
+  }
+  return `table_${randomBytes(4).toString("hex")}`;
 }
 
 function normalizeCode(code: string): string {
-  return code.trim().toUpperCase();
+  return code
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/-+/g, "_")
+    .replace(/_+/g, "_");
 }
 
 function buildLobbySummaries(): LobbyRoomSummary[] {
@@ -93,8 +101,7 @@ export async function buildServer() {
             room.broadcast();
           }
         }
-        let code = newRoomCode();
-        while (rooms.has(code)) code = newRoomCode();
+        const code = allocateNewRoomCode();
         const r = new Room(code, connectionId);
         rooms.set(code, r);
         room = r;
