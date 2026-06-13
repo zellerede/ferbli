@@ -37,8 +37,9 @@ Build the web bundle with `VITE_WS_URL` pointing at your server, e.g. `ws://127.
 - **Hand score**: best sum from **2, 3, or 4 cards of the same suit** (best subset per suit, then max across suits). If **all four suits differ**, score is the **highest single-card** value. If **no** suit has two or more cards (so that sum does not apply), score is still that **high card** — the lowest card in the deck is **seven** (**7** points), so any **non-empty** hand scores at least **7**; only an **empty** hand scores **0**.
 - **Example**: Herz ace + Herz king + Herz nine + Schelle seven → best Herz triple is ace + king + nine = 11 + 10 + 9 = **30**.
 - **Table**: up to **6 seats** (humans and/or bots). **Dealer** rotates among seated players with coins. **Blind** is the next seat after the dealer in cyclic seat order among players in the hand; the blind **always pays 1 coin** and stays in.
-- **Ante round**: everyone is dealt **4 cards** (2 face-up, 2 face-down). Non-blind players, in turn, **fold** (free) or **enter** (pay **1 coin**). Then all cards are shown and the best score among players still **in the round** wins the **pot**.
+- **Ante round**: everyone is dealt **4 cards** (2 face-up, 2 face-down). Each non-blind player **fold** (free) or **enter** (pay **1 coin**) when ready (no fixed order); the hand continues once **all** of them have chosen. Then all cards are shown and the best score among players still **in the round** wins the **pot**.
 - **Ties**: the pot is split evenly; any **remainder coins** go to the **lowest seat number** among tied winners first.
+- **Round end**: After each completed or aborted hand, every **connected human who was in that hand** must send **`ack_round_result`** before the next deal (human **Deal** or bot auto-deal). The server exposes this on `RoomSnapshot` as `roundResultPending`, `roundResultRequiredSeats`, and `roundResultAckedSeats` (**`PROTOCOL_VERSION` 3**).
 
 ## Layout
 

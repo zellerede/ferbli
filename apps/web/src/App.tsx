@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ClientMessage, HandPhase, RoomSnapshot, PlayerHandSnapshot } from "@ferbli/protocol";
+import type {
+  ClientMessage,
+  HandPhase,
+  PlayerHandSnapshot,
+  RoomSnapshot,
+} from "@ferbli/protocol";
 import { PROTOCOL_VERSION } from "@ferbli/protocol";
 import { CardFace } from "./CardFace.js";
 
@@ -27,15 +32,87 @@ function wireDataToStringSync(data: unknown): string {
 function handRoundLabel(
   phase: HandPhase,
   h: PlayerHandSnapshot,
-  actionSeat: number | null,
+  blindSeat: number | null,
 ): string {
   if (h.inRound) return "in round";
   if (phase === "ante") {
     if (h.foldedAnte) return "folded";
-    if (actionSeat === h.seatIndex) return "to decide";
+    if (blindSeat !== null && h.seatIndex !== blindSeat) return "to decide";
     return "waiting";
   }
   return "folded";
+}
+
+type RoundResultModal = {
+  variant: "win" | "lose" | "cancelled";
+  title: string;
+  detail: string;
+  /** Last hand reveal for this seat; null if unavailable (e.g. aborted hand). */
+  playerHand: PlayerHandSnapshot | null;
+};
+
+type RoundResultSummary = Omit<RoundResultModal, "playerHand">;
+
+function abortedRoundMessage(lastMessage: string | null): boolean {
+  const t = lastMessage ?? "";
+  return t.includes("aborted") || t.includes("player left");
+}
+
+function roundResultForSeat(
+  roomState: RoomSnapshot,
+  mySeat: number,
+): RoundResultSummary | null {
+  const hands = roomState.showdownHands;
+  if (!hands?.length) return null;
+
+  const mine = hands.find((h) => h.seatIndex === mySeat);
+  if (!mine) return null;
+
+  const inShowdown = hands.filter((h) => h.inRound && h.score !== null);
+  if (inShowdown.length === 0) {
+    if (!mine.inRound) {
+      return {
+        variant: "lose",
+        title: "You lost this round",
+        detail: "You did not enter the showdown.",
+      };
+    }
+    return {
+      variant: "lose",
+      title: "You lost this round",
+      detail: "No one contested the pot.",
+    };
+  }
+
+  const best = Math.max(...inShowdown.map((h) => h.score!));
+  const winnerCount = inShowdown.filter((h) => h.score === best).length;
+
+  if (!mine.inRound || mine.score === null) {
+    return {
+      variant: "lose",
+      title: "You lost this round",
+      detail: mine.foldedAnte
+        ? "You folded in the ante."
+        : "You did not enter the showdown.",
+    };
+  }
+
+  if (mine.score === best) {
+    const tie = winnerCount > 1;
+    return {
+      variant: "win",
+      title: tie ? "You won this round (split pot)" : "You won this round",
+      detail: tie
+        ? `Your score of ${mine.score} tied for best among ${winnerCount} players.`
+        : `Your score of ${mine.score} took the pot.`,
+    };
+  }
+
+  return {
+    variant: "lose",
+    title: "You lost this round",
+    detail: `Your score was ${mine.score}; the best score at the table was ${best}.`,
+  };
 }
 
 export function App() {
@@ -193,22 +270,93 @@ export function App() {
     return idx === -1 ? null : idx;
   }, [connectionId, roomState]);
 
-  /** Between hands: next dealer seat, or host when that seat is a bot. */
+  /** Between hands: next dealer seat; if that seat is a bot, the server deals automatically. */
   const canDeal = useMemo(() => {
     if (!connectionId || !roomState || roomState.phase !== "idle") return false;
+    if (roomState.roundResultPending) return false;
     const d = roomState.nextDealerSeat;
     if (d === null) return false;
     const seat = roomState.seats[d];
-    if (!seat) return false;
-    if (seat.kind === "bot") return isHost;
+    if (!seat || seat.kind === "bot") return false;
     return seat.connectionId === connectionId;
-  }, [connectionId, roomState, isHost]);
+  }, [connectionId, roomState]);
 
   const handsToShow = useMemo(() => {
     if (!roomState) return [];
     if (roomState.hands.length > 0) return roomState.hands;
     return roomState.showdownHands ?? [];
   }, [roomState]);
+
+  /** During ante, this seat still needs a fold/enter choice (blind is automatic). */
+  const myAnteNeedsChoice = useMemo(() => {
+    if (!roomState || roomState.phase !== "ante" || mySeat === null) return false;
+    if (roomState.blindSeat === mySeat) return false;
+    const h = roomState.hands.find((x) => x.seatIndex === mySeat);
+    if (!h) return false;
+    return !h.inRound && !h.foldedAnte;
+  }, [roomState, mySeat]);
+
+  const acknowledgeRound = useCallback(() => {
+    send({ type: "ack_round_result" });
+  }, [send]);
+
+  /** You must acknowledge before the next deal; server clears this after `ack_round_result`. */
+  const roundAckBlocking = useMemo((): RoundResultModal | null => {
+    if (!roomState?.roundResultPending || mySeat === null) return null;
+    const required = roomState.roundResultRequiredSeats;
+    const acked = roomState.roundResultAckedSeats;
+    if (!required.includes(mySeat) || acked.includes(mySeat)) return null;
+
+    const last = roomState.lastMessage;
+    const playerHand =
+      roomState.showdownHands?.find((h) => h.seatIndex === mySeat) ?? null;
+
+    if (abortedRoundMessage(last)) {
+      return {
+        variant: "cancelled",
+        title: "Hand cancelled",
+        detail: last ?? "The hand was stopped.",
+        playerHand,
+      };
+    }
+
+    const summary =
+      roundResultForSeat(roomState, mySeat) ?? {
+        variant: "lose" as const,
+        title: "Round over",
+        detail: last ?? "Press OK to continue.",
+      };
+
+    return { ...summary, playerHand };
+  }, [roomState, mySeat]);
+
+  const roundAckWaitingNotice = useMemo(() => {
+    if (!roomState?.roundResultPending) return null;
+    const required = roomState.roundResultRequiredSeats;
+    const acked = roomState.roundResultAckedSeats;
+    const waitingOn = required.filter((s) => !acked.includes(s));
+    if (waitingOn.length === 0) return null;
+
+    if (mySeat === null) {
+      return "The next hand will start after all players in the last round acknowledge the result.";
+    }
+    if (!required.includes(mySeat)) {
+      return "The next hand will start after players in the last round acknowledge the result.";
+    }
+    if (acked.includes(mySeat)) {
+      return "Waiting for other players to acknowledge the last round…";
+    }
+    return null;
+  }, [roomState, mySeat]);
+
+  useEffect(() => {
+    if (!roundAckBlocking) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") acknowledgeRound();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [roundAckBlocking, acknowledgeRound]);
 
   if (!connectionId) {
     return (
@@ -381,12 +529,17 @@ export function App() {
               {roomState.blindSeat !== null && (
                 <span className="muted">Blind: seat {roomState.blindSeat + 1}</span>
               )}
-              {roomState.actionSeat !== null && (
+              {roomState.phase === "ante" && (
                 <span className="muted">
-                  Action: seat {roomState.actionSeat + 1}
+                  Ante: each non-blind player folds or enters (any order).
                 </span>
               )}
             </div>
+            {roundAckWaitingNotice ? (
+              <p className="muted" style={{ marginTop: "0.75rem" }}>
+                {roundAckWaitingNotice}
+              </p>
+            ) : null}
             {canDeal && (
               <div className="row" style={{ marginTop: "0.75rem" }}>
                 <button type="button" onClick={() => send({ type: "start_hand" })}>
@@ -394,9 +547,7 @@ export function App() {
                 </button>
               </div>
             )}
-            {roomState.phase === "ante" &&
-              mySeat !== null &&
-              roomState.actionSeat === mySeat && (
+            {roomState.phase === "ante" && myAnteNeedsChoice && (
                 <div className="row" style={{ marginTop: "0.75rem" }}>
                   <button type="button" onClick={() => send({ type: "hand_action", action: "enter" })}>
                     Enter (pay 1 coin)
@@ -414,14 +565,18 @@ export function App() {
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Cards</h2>
             {handsToShow.length === 0 && (
-              <p className="muted">No active hand. The dealer presses Deal when ready.</p>
+              <p className="muted">
+                {roomState.roundResultPending
+                  ? "Waiting for all players in the last round to acknowledge before the next deal."
+                  : "No active hand. The dealer presses Deal when ready."}
+              </p>
             )}
             {handsToShow.map((h) => (
               <div key={h.seatIndex} style={{ marginBottom: "1rem" }}>
                 <div>
                   <strong>Seat {h.seatIndex + 1}</strong>{" "}
                   <span className="muted">
-                    {handRoundLabel(roomState.phase, h, roomState.actionSeat)} · score{" "}
+                    {handRoundLabel(roomState.phase, h, roomState.blindSeat)} · score{" "}
                     {h.score ?? "—"}
                   </span>
                 </div>
@@ -439,6 +594,48 @@ export function App() {
           </div>
         </>
       )}
+
+      {roundAckBlocking ? (
+        <div className="round-result-backdrop" role="presentation">
+          <div
+            className={`round-result-dialog round-result-${roundAckBlocking.variant}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="round-result-title"
+          >
+            <h2 id="round-result-title" style={{ marginTop: 0 }}>
+              {roundAckBlocking.title}
+            </h2>
+            <p style={{ marginBottom: 0 }}>{roundAckBlocking.detail}</p>
+            {roundAckBlocking.playerHand ? (
+              <div style={{ marginTop: "1.1rem" }}>
+                <div className="muted" style={{ marginBottom: "0.35rem" }}>
+                  Your cards
+                </div>
+                <div className="card-row">
+                  {roundAckBlocking.playerHand.cards.map((slot, idx) => (
+                    <CardFace
+                      key={idx}
+                      card={slot.card}
+                      faceDown={!slot.faceUp}
+                    />
+                  ))}
+                </div>
+                {roundAckBlocking.playerHand.score !== null ? (
+                  <p className="muted" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+                    Hand score: {roundAckBlocking.playerHand.score}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="row" style={{ marginTop: "1.25rem", justifyContent: "flex-end" }}>
+              <button type="button" onClick={acknowledgeRound}>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

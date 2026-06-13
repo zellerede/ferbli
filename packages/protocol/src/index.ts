@@ -1,5 +1,5 @@
 /** Wire format version for client/server compatibility. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 3;
 
 /** Max seats at the table (humans + bots). */
 export const MAX_SEATS = 6;
@@ -55,7 +55,7 @@ export type PlayerHandSnapshot = {
   cards: CardSlot[];
   /** Still competing for the pot after ante. */
   inRound: boolean;
-  /** During ante: set once the player chose to fold (vs still deciding / not reached yet). */
+  /** During ante: true if folded; false while deciding or after entering (see also inRound). */
   foldedAnte?: boolean;
   /** Shown after showdown for in-round players. */
   score: number | null;
@@ -75,7 +75,10 @@ export type RoomSnapshot = {
   pot: number;
   /** Seat indices participating in the current hand (had enough coins at start). */
   handSeats: number[];
-  /** Whose turn to fold/enter (null if not applicable). */
+  /**
+   * Reserved for turn-based phases. During ante, decisions are parallel
+   * (every non-blind player when ready), so this is always null.
+   */
   actionSeat: number | null;
   /** Between hands (no activeHand): seat that will deal next; null if fewer than two players with coins. */
   nextDealerSeat: number | null;
@@ -84,6 +87,16 @@ export type RoomSnapshot = {
   showdownHands: PlayerHandSnapshot[] | null;
   /** Last hand result message for UI. */
   lastMessage: string | null;
+  /**
+   * When true, the next hand must not start until every seat in
+   * `roundResultRequiredSeats` has sent `ack_round_result` (then appears in
+   * `roundResultAckedSeats`). Bots never appear in these lists.
+   */
+  roundResultPending: boolean;
+  /** Human seats that must acknowledge before the next deal (subset of last `handSeats`). */
+  roundResultRequiredSeats: number[];
+  /** Human seats that have already acknowledged for this barrier. */
+  roundResultAckedSeats: number[];
 };
 
 export type ClientMessage =
@@ -95,7 +108,8 @@ export type ClientMessage =
   | { type: "release_seat" }
   | { type: "set_bot"; seatIndex: number; enabled: boolean }
   | { type: "start_hand" }
-  | { type: "hand_action"; action: "fold" | "enter" };
+  | { type: "hand_action"; action: "fold" | "enter" }
+  | { type: "ack_round_result" };
 
 export type ServerMessage =
   | { type: "welcome"; connectionId: string }

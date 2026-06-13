@@ -101,31 +101,33 @@ export function scoreHand(cards: Card[]): number {
 export type AnteAction = "fold" | "enter";
 
 export type AnteContext = {
-  /** Seat index whose turn it is (not the blind during their auto-enter). */
-  actionSeat: number;
   blindSeat: number;
-  /** Seats still in hand at ante (ordered). */
+  /** Seats dealt into this hand (includes blind). */
   handSeats: number[];
 };
 
 /**
  * Legal ante actions for a seat. Blind never chooses here (forced enter).
+ * @param antePending — true if this seat has not yet chosen fold or enter.
  */
 export function legalAnteActions(
   ctx: AnteContext,
   seatIndex: number,
+  antePending: boolean,
 ): AnteAction[] {
-  if (ctx.actionSeat !== seatIndex) return [];
+  if (!antePending) return [];
   if (seatIndex === ctx.blindSeat) return [];
+  if (!ctx.handSeats.includes(seatIndex)) return [];
   return ["fold", "enter"];
 }
 
 export function pickRandomAnteAction(
   ctx: AnteContext,
   seatIndex: number,
+  antePending: boolean,
   random: () => number = Math.random,
 ): AnteAction | null {
-  const legal = legalAnteActions(ctx, seatIndex);
+  const legal = legalAnteActions(ctx, seatIndex, antePending);
   if (legal.length === 0) return null;
   return legal[Math.floor(random() * legal.length)]!;
 }

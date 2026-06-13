@@ -35,9 +35,8 @@ type ActiveHand = {
   dealerSeat: number;
   blindSeat: number;
   handSeats: number[];
-  /** Seats that must choose fold/enter after blind (circular order). */
+  /** Non-blind seats that must choose fold/enter (any order). */
   anteOrder: number[];
-  anteIndex: number;
   cards: Map<number, SeatCards>;
   pot: number;
   phase: "ante" | "reveal" | "showdown";
@@ -86,6 +85,9 @@ export class Room {
   /** Persisted reveal for UI after `activeHand` is cleared. */
   showdownHands: PlayerHandSnapshot[] | null = null;
   phase: HandPhase = "idle";
+  /** Human seats that must send `ack_round_result` before the next deal. */
+  private roundAckRequired: Set<number> | null = null;
+  private roundAcked: Set<number> | null = null;
 
   constructor(code: string, hostConnectionId: string) {
     this.code = code;
@@ -97,12 +99,18 @@ export class Room {
   }
 
   removeConnection(connectionId: string): void {
-    this.connections.delete(connectionId);
-    for (const seat of this.seats) {
-      if (seat && seat.kind === "human" && seat.connectionId === connectionId) {
+    const waivedSeats: number[] = [];
+    for (let i = 0; i < MAX_SEATS; i++) {
+      const seat = this.seats[i];
+      if (seat?.kind === "human" && seat.connectionId === connectionId) {
+        waivedSeats.push(i);
         seat.connectionId = null;
       }
     }
+    for (const s of waivedSeats) {
+      this.waiveAckForSeatIfWaiting(s);
+    }
+    this.connections.delete(connectionId);
     if (this.hostConnectionId === connectionId) {
       this.hostConnectionId = this.pickNextHost(connectionId);
     }
@@ -115,12 +123,115 @@ export class Room {
     return null;
   }
 
+  private roundAckWaiting(): boolean {
+    if (!this.roundAckRequired || this.roundAckRequired.size === 0) {
+      return false;
+    }
+    if (!this.roundAcked) return true;
+    for (const s of this.roundAckRequired) {
+      if (!this.roundAcked.has(s)) return true;
+    }
+    return false;
+  }
+
+  /** Clears barrier when every required seat has acked (or lists became empty). */
+  private tryFinishRoundAckBarrier(): void {
+    if (!this.roundAckRequired || this.roundAckRequired.size === 0) {
+      this.roundAckRequired = null;
+      this.roundAcked = null;
+      return;
+    }
+    if (!this.roundAcked) return;
+    for (const s of this.roundAckRequired) {
+      if (!this.roundAcked.has(s)) return;
+    }
+    this.roundAckRequired = null;
+    this.roundAcked = null;
+  }
+
+  /** Seat left or disconnected: no longer must (or can) ack for this barrier. */
+  private waiveAckForSeatIfWaiting(seat: number): void {
+    if (!this.roundAckRequired?.has(seat)) return;
+    this.roundAckRequired.delete(seat);
+    this.roundAcked?.delete(seat);
+    if (this.roundAckRequired.size === 0) {
+      this.roundAckRequired = null;
+      this.roundAcked = null;
+    } else {
+      this.tryFinishRoundAckBarrier();
+    }
+  }
+
+  /**
+   * After a hand ends (showdown or abort), require connected humans who were
+   * in that hand to ack before the next deal. `excludeSeat` skips a departing player.
+   */
+  private beginRoundAck(hand: ActiveHand, opts?: { excludeSeat?: number }): void {
+    const exclude = opts?.excludeSeat;
+    const required = new Set<number>();
+    for (const seat of hand.handSeats) {
+      if (seat === exclude) continue;
+      const pl = this.seats[seat];
+      if (pl?.kind === "human" && pl.connectionId) {
+        required.add(seat);
+      }
+    }
+    if (required.size === 0) {
+      this.roundAckRequired = null;
+      this.roundAcked = null;
+      return;
+    }
+    this.roundAckRequired = required;
+    this.roundAcked = new Set();
+  }
+
+  ackRoundResult(connectionId: string): string | null {
+    if (!this.roundAckWaiting()) {
+      return null;
+    }
+    const required = this.roundAckRequired;
+    const acked = this.roundAcked;
+    if (!required || !acked) {
+      return null;
+    }
+    const seatIdx = this.seats.findIndex(
+      (s) => s?.kind === "human" && s.connectionId === connectionId,
+    );
+    if (seatIdx === -1) return "You are not seated";
+    if (!required.has(seatIdx)) {
+      return "You did not take part in that round";
+    }
+    if (acked.has(seatIdx)) {
+      return null;
+    }
+    acked.add(seatIdx);
+    this.tryFinishRoundAckBarrier();
+    return null;
+  }
+
   broadcast(): void {
     const snap = this.snapshot();
     const payload = JSON.stringify({ type: "room_state", state: snap });
     for (const [, send] of this.connections) {
       send(payload);
     }
+    this.maybeAutoDealForBotDealer();
+  }
+
+  /** If the next dealer is a bot, start the hand here (no human presses Deal). */
+  maybeAutoDealForBotDealer(): void {
+    if (this.activeHand) return;
+    if (this.phase !== "idle") return;
+    if (this.roundAckWaiting()) return;
+    const dealerSeat = this.peekNextDealerSeat();
+    if (dealerSeat === null) return;
+    const seat = this.seats[dealerSeat];
+    if (!seat || seat.kind !== "bot") return;
+    const err = this.startHand();
+    if (err) return;
+    this.broadcast();
+    this.advanceAnteOrFinish();
+    this.broadcast();
   }
 
   snapshot(): RoomSnapshot {
@@ -184,17 +295,33 @@ export class Room {
       hands,
       showdownHands: this.showdownHands,
       lastMessage: this.lastMessage,
+      roundResultPending: this.roundAckWaiting(),
+      roundResultRequiredSeats: this.roundAckRequired
+        ? [...this.roundAckRequired].sort((a, b) => a - b)
+        : [],
+      roundResultAckedSeats: this.roundAcked
+        ? [...this.roundAcked].sort((a, b) => a - b)
+        : [],
     };
   }
 
   getActionSeat(): number | null {
-    if (!this.activeHand || this.activeHand.phase !== "ante") return null;
-    const { anteOrder, anteIndex } = this.activeHand;
-    if (anteIndex >= anteOrder.length) return null;
-    const seat = anteOrder[anteIndex]!;
-    const seatData = this.seats[seat];
-    if (!seatData) return null;
-    return seat;
+    return null;
+  }
+
+  /** Non-blind player still deciding fold vs enter (not yet acted). */
+  private isAntePending(hand: ActiveHand, seat: number): boolean {
+    if (seat === hand.blindSeat) return false;
+    const sc = hand.cards.get(seat);
+    if (!sc) return false;
+    return !sc.inRound && !sc.foldedAnte;
+  }
+
+  private allAnteDecided(hand: ActiveHand): boolean {
+    return hand.anteOrder.every((seat) => {
+      const sc = hand.cards.get(seat);
+      return sc && (sc.inRound || sc.foldedAnte);
+    });
   }
 
   isHost(connectionId: string): boolean {
@@ -212,14 +339,14 @@ export class Room {
     return nextDealer(handSeats, this.lastDealerSeat);
   }
 
-  /** Between hands: human at next dealer seat, or host when the next dealer is a bot. */
+  /** Between hands: only the human seated at the next dealer seat may deal (never a bot seat). */
   canDeal(connectionId: string): boolean {
     if (this.activeHand) return false;
+    if (this.roundAckWaiting()) return false;
     const dealerSeat = this.peekNextDealerSeat();
     if (dealerSeat === null) return false;
     const seat = this.seats[dealerSeat];
-    if (!seat) return false;
-    if (seat.kind === "bot") return this.isHost(connectionId);
+    if (!seat || seat.kind === "bot") return false;
     return seat.connectionId === connectionId;
   }
 
@@ -274,6 +401,12 @@ export class Room {
         this.broadcast();
         return null;
       }
+      case "ack_round_result": {
+        const err = this.ackRoundResult(connectionId);
+        if (err) return err;
+        this.broadcast();
+        return null;
+      }
       default:
         return "Unknown message type";
     }
@@ -304,10 +437,16 @@ export class Room {
       (s) => s?.kind === "human" && s.connectionId === connectionId,
     );
     if (idx === -1) return;
+
+    this.waiveAckForSeatIfWaiting(idx);
+
     if (this.activeHand) {
+      const hand = this.activeHand;
       this.lastMessage = "Hand aborted: player left.";
       this.activeHand = null;
       this.phase = "idle";
+      this.showdownHands = null;
+      this.beginRoundAck(hand, { excludeSeat: idx });
     }
     this.seats[idx] = null;
   }
@@ -326,9 +465,12 @@ export class Room {
       const s = this.seats[seatIndex];
       if (!s || s.kind !== "bot") return "No bot there";
       if (this.activeHand) {
+        const hand = this.activeHand;
         this.lastMessage = "Hand aborted: bot removed.";
         this.activeHand = null;
         this.phase = "idle";
+        this.showdownHands = null;
+        this.beginRoundAck(hand);
       }
       this.seats[seatIndex] = null;
     }
@@ -337,6 +479,9 @@ export class Room {
 
   startHand(): string | null {
     if (this.activeHand) return "Hand already running";
+    if (this.roundAckWaiting()) {
+      return "Wait until every player has acknowledged the last round.";
+    }
     this.showdownHands = null;
     const handSeats: number[] = [];
     for (let i = 0; i < MAX_SEATS; i++) {
@@ -378,7 +523,6 @@ export class Room {
       blindSeat,
       handSeats,
       anteOrder,
-      anteIndex: 0,
       cards,
       pot: 1,
       phase: "ante",
@@ -396,21 +540,24 @@ export class Room {
     if (!this.activeHand || this.activeHand.phase !== "ante") {
       return "No action expected";
     }
-    const seat = this.getActionSeat();
-    if (seat === null) return "Not your turn";
+    const hand = this.activeHand;
+    const seat = this.seats.findIndex(
+      (s) => s?.kind === "human" && s.connectionId === connectionId,
+    );
+    if (seat === -1) return "Not seated";
+    if (!hand.anteOrder.includes(seat)) return "Not in this ante";
     const seatData = this.seats[seat];
-    if (!seatData || seatData.kind !== "human" || seatData.connectionId !== connectionId) {
-      return "Not your seat to act";
-    }
+    if (!seatData || seatData.kind !== "human") return "Not your seat to act";
+    if (!this.isAntePending(hand, seat)) return "Already acted";
     return this.resolveAnteForSeat(seat, action);
   }
 
   resolveAnteForSeat(seat: number, action: "fold" | "enter"): string | null {
     const hand = this.activeHand;
     if (!hand || hand.phase !== "ante") return "Invalid state";
-    const expected = hand.anteOrder[hand.anteIndex];
-    if (expected !== seat) return "Wrong turn order";
     if (seat === hand.blindSeat) return "Blind is automatic";
+    if (!hand.anteOrder.includes(seat)) return "Not in this ante";
+    if (!this.isAntePending(hand, seat)) return "Already acted";
 
     const data = this.seats[seat];
     const sc = hand.cards.get(seat);
@@ -426,7 +573,6 @@ export class Room {
       sc.foldedAnte = false;
       hand.pot += 1;
     }
-    hand.anteIndex += 1;
     return null;
   }
 
@@ -434,27 +580,18 @@ export class Room {
     const hand = this.activeHand;
     if (!hand || hand.phase !== "ante") return;
 
-    while (hand.anteIndex < hand.anteOrder.length) {
-      const nextSeat = hand.anteOrder[hand.anteIndex]!;
+    const ctx = { blindSeat: hand.blindSeat, handSeats: hand.handSeats };
+    for (const nextSeat of hand.anteOrder) {
       const sd = this.seats[nextSeat];
-      if (sd?.kind === "bot") {
-        const choice = pickRandomAnteAction(
-          {
-            actionSeat: nextSeat,
-            blindSeat: hand.blindSeat,
-            handSeats: hand.handSeats,
-          },
-          nextSeat,
-        );
-        if (!choice) break;
-        const err = this.resolveAnteForSeat(nextSeat, choice);
-        if (err) break;
-        continue;
-      }
-      break;
+      if (sd?.kind !== "bot") continue;
+      const pending = this.isAntePending(hand, nextSeat);
+      const choice = pickRandomAnteAction(ctx, nextSeat, pending);
+      if (!choice) continue;
+      const err = this.resolveAnteForSeat(nextSeat, choice);
+      if (err) break;
     }
 
-    if (hand.anteIndex >= hand.anteOrder.length) {
+    if (this.allAnteDecided(hand)) {
       hand.phase = "reveal";
       this.phase = "reveal";
       this.finishShowdown();
@@ -503,6 +640,7 @@ export class Room {
 
     if (contenders.length === 0) {
       this.lastMessage = "No players entered the showdown.";
+      this.beginRoundAck(hand);
       this.activeHand = null;
       this.phase = "idle";
       return;
@@ -524,6 +662,7 @@ export class Room {
     }
 
     this.lastMessage = `Showdown: winner is ${winnerNames.join(", ")} with ${best} pts. Pot ${pot} is taken.`;
+    this.beginRoundAck(hand);
     this.activeHand = null;
     this.phase = "idle";
   }

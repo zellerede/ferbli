@@ -94,3 +94,45 @@ input {
 .error {
   color: #ff8a8a;
 }
+
+.round-result-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(5, 8, 14, 0.72);
+}
+
+.round-result-dialog {
+  max-width: min(420px, 100%);
+  padding: 1.35rem 1.5rem;
+  border-radius: 12px;
+  border: 1px solid #2a3548;
+  background: #1a2230;
+  box-shadow: 0 16px 48px #000a;
+}
+
+.round-result-dialog h2 {
+  font-size: 1.35rem;
+  line-height: 1.25;
+}
+
+.round-result-win {
+  border-color: #2d6a4f;
+  box-shadow: 0 0 0 1px #40916c55, 0 16px 48px #000a;
+}
+
+.round-result-win h2 {
+  color: #95d5b2;
+}
+
+.round-result-lose h2 {
+  color: #f4a261;
+}
+
+.round-result-cancelled h2 {
+  color: #8b98ad;
+}
