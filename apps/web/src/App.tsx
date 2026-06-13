@@ -10,6 +10,19 @@ function wsUrlFromLocation(): string {
   return `${proto}://${location.host}/ws`;
 }
 
+/** Non-Blob frames can be decoded synchronously (avoids applying messages after the socket closed). */
+function wireDataToStringSync(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView;
+    return new TextDecoder().decode(
+      view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength),
+    );
+  }
+  return String(data);
+}
+
 export function App() {
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [roomState, setRoomState] = useState<RoomSnapshot | null>(null);
@@ -17,41 +30,138 @@ export function App() {
   const [displayName, setDisplayName] = useState("You");
   const [joinCode, setJoinCode] = useState("");
   const wsRef = useRef<WebSocket | null>(null);
+  const welcomedRef = useRef(false);
+  /** Messages sent while the socket is still CONNECTING (e.g. React Strict Mode remount). */
+  const outboundQueueRef = useRef<ClientMessage[]>([]);
 
   const send = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify(msg));
+    if (!ws) {
+      setError(
+        "Not connected to the game server (socket missing). Try refreshing; if it persists, run `npm run dev` from the repo root.",
+      );
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+      return;
+    }
+    if (ws.readyState === WebSocket.CONNECTING) {
+      outboundQueueRef.current.push(msg);
+      return;
+    }
+    setError(
+      "Cannot send to the server: WebSocket is not open. Refresh the page or wait until you are connected.",
+    );
   }, []);
 
   useEffect(() => {
-    const ws = new WebSocket(wsUrlFromLocation());
+    let cancelled = false;
+    const wsUrl = wsUrlFromLocation();
+    welcomedRef.current = false;
+    outboundQueueRef.current = [];
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+    setError(null);
     ws.onmessage = (ev) => {
-      const msg = JSON.parse(String(ev.data)) as {
-        type: string;
-        connectionId?: string;
-        message?: string;
-        state?: RoomSnapshot;
+      const myWs = ws;
+
+      const applyPayload = (text: string) => {
+        // Drop stale events from an old socket or after close (wsRef cleared).
+        if (wsRef.current !== myWs) return;
+
+        let msg: {
+          type: string;
+          connectionId?: string;
+          message?: string;
+          state?: RoomSnapshot;
+        };
+        try {
+          msg = JSON.parse(text) as typeof msg;
+        } catch {
+          setError("Invalid message from server (not JSON).");
+          return;
+        }
+        if (wsRef.current !== myWs) return;
+
+        if (msg.type === "welcome" && msg.connectionId) {
+          welcomedRef.current = true;
+          setConnectionId(msg.connectionId);
+          setError(null);
+        }
+        if (msg.type === "room_state" && msg.state) {
+          setRoomState(msg.state);
+          setError(null);
+        }
+        if (msg.type === "error" && msg.message) {
+          setError(msg.message);
+        }
       };
-      if (msg.type === "welcome" && msg.connectionId) {
-        setConnectionId(msg.connectionId);
-        setError(null);
+
+      const raw = ev.data;
+      if (typeof raw === "string") {
+        applyPayload(raw);
+        return;
       }
-      if (msg.type === "room_state" && msg.state) {
-        setRoomState(msg.state);
-        setError(null);
+      if (raw instanceof Blob) {
+        void raw.text().then((text) => {
+          if (wsRef.current !== myWs) return;
+          applyPayload(text);
+        });
+        return;
       }
-      if (msg.type === "error" && msg.message) {
-        setError(msg.message);
-      }
+      applyPayload(wireDataToStringSync(raw));
     };
     ws.onopen = () => {
-      send({ type: "hello", protocolVersion: PROTOCOL_VERSION });
+      if (wsRef.current !== ws) return;
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          protocolVersion: PROTOCOL_VERSION,
+        }),
+      );
+      const queued = outboundQueueRef.current;
+      outboundQueueRef.current = [];
+      for (const m of queued) {
+        ws.send(JSON.stringify(m));
+      }
+    };
+    ws.onerror = () => {
+      if (wsRef.current !== ws) return;
+      setError(
+        `WebSocket error (could not reach game server). Tried: ${wsUrl}. With Vite dev, use "npm run dev" from the repo root and keep the server on port 3333.`,
+      );
+    };
+    ws.onclose = () => {
+      const stillTracked = wsRef.current === ws;
+      if (stillTracked) {
+        wsRef.current = null;
+      }
+      if (cancelled) return;
+      if (!stillTracked) return;
+      const hadWelcome = welcomedRef.current;
+      welcomedRef.current = false;
+      setConnectionId(null);
+      setRoomState(null);
+      if (!hadWelcome) {
+        setError(
+          `WebSocket closed before welcome. Tried: ${wsUrl}. Start the game server on port 3333, or set VITE_WS_URL=ws://127.0.0.1:3333/ws if the UI is not served by Vite.`,
+        );
+      } else {
+        setError(
+          "Disconnected from the game server. Refresh the page, then create or join a room again.",
+        );
+      }
     };
     return () => {
+      cancelled = true;
+      setConnectionId(null);
+      setRoomState(null);
+      welcomedRef.current = false;
       ws.close();
-      wsRef.current = null;
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
     };
   }, [send]);
 
@@ -77,7 +187,12 @@ export function App() {
   if (!connectionId) {
     return (
       <div className="app">
-        <p className="muted">Connecting…</p>
+        <h1>Ferbli</h1>
+        {error ? (
+          <p className="error">{error}</p>
+        ) : (
+          <p className="muted">Connecting…</p>
+        )}
       </div>
     );
   }
@@ -85,6 +200,7 @@ export function App() {
   return (
     <div className="app">
       <h1>Ferbli</h1>
+      {error ? <p className="error">{error}</p> : null}
       <p className="muted">
         German 32-card room play · dealer rotates · blind pays 1 coin · others
         fold or pay 1 after seeing two up-cards · best same-suit combo wins the
@@ -289,8 +405,6 @@ export function App() {
           </div>
         </>
       )}
-
-      {error && <p className="error">{error}</p>}
     </div>
   );
 }

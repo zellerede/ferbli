@@ -17,8 +17,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Use http:// + ws:true so the dev server performs a proper WS upgrade
+      // (some setups break when target is ws:// — browser stays on "Connecting…").
       "/ws": {
-        target: "ws://127.0.0.1:3333",
+        target: "http://127.0.0.1:3333",
+        changeOrigin: true,
         ws: true,
       },
     },

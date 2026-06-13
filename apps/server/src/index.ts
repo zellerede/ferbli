@@ -2,7 +2,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import type { ClientMessage } from "@ferbli/protocol";
+import type { SendFn } from "./room.js";
 import { Room } from "./room.js";
+
+type WsRawMessage = string | Buffer | ArrayBuffer | Buffer[];
 
 const rooms = new Map<string, Room>();
 
@@ -27,13 +30,14 @@ export async function buildServer() {
 
   app.get("/health", async () => ({ ok: true }));
 
-  app.get("/ws", { websocket: true }, (connection) => {
+  app.get("/ws", { websocket: true }, (socket, request) => {
     const connectionId = randomUUID();
     let room: Room | null = null;
+    const log = request.log;
 
-    const send = (payload: string) => {
+    const send: SendFn = (msg) => {
       try {
-        connection.socket.send(payload);
+        socket.send(String(msg));
       } catch {
         /* socket may be closing */
       }
@@ -41,7 +45,7 @@ export async function buildServer() {
 
     send(JSON.stringify({ type: "welcome", connectionId }));
 
-    connection.socket.on("message", (raw) => {
+    socket.on("message", (raw: WsRawMessage) => {
       let msg: ClientMessage;
       try {
         msg = JSON.parse(String(raw)) as ClientMessage;
@@ -53,6 +57,10 @@ export async function buildServer() {
       if (!msg || typeof msg !== "object" || !("type" in msg)) {
         send(JSON.stringify({ type: "error", message: "Invalid message" }));
         return;
+      }
+
+      if (msg.type !== "hello") {
+        log.info({ wsIn: msg.type, connectionId });
       }
 
       if (msg.type === "hello") {
@@ -123,7 +131,7 @@ export async function buildServer() {
       }
     });
 
-    connection.socket.on("close", () => {
+    socket.on("close", () => {
       if (!room) return;
       room.removeConnection(connectionId);
       if (room.connections.size === 0) {
