@@ -16,7 +16,7 @@ function allocateNewRoomCode(): string {
     if (!rooms.has(code)) return code;
   }
   for (let i = 0; i < 40; i++) {
-    const code = `${randomRoomSlug()}_${randomInt(100, 999)}`;
+    const code = `${randomRoomSlug()}-${randomInt(100, 999)}`;
     if (!rooms.has(code)) return code;
   }
   return `table_${randomBytes(4).toString("hex")}`;
@@ -26,9 +26,9 @@ function normalizeCode(code: string): string {
   return code
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, "_")
-    .replace(/-+/g, "_")
-    .replace(/_+/g, "_");
+    .replace(/\s+/g, "-")
+    .replace(/_+/g, "-")
+    .replace(/-+/g, "-");
 }
 
 function buildLobbySummaries(): LobbyRoomSummary[] {

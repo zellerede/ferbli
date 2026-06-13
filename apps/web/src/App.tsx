@@ -418,15 +418,15 @@ export function App() {
           </div>
           <div className="row" style={{ marginTop: "0.75rem" }}>
             <input
-              placeholder="e.g. calm_otter"
+              placeholder="e.g. calm-otter"
               value={joinCode}
               onChange={(e) =>
                 setJoinCode(
                   e.target.value
                     .trimStart()
                     .toLowerCase()
-                    .replace(/\s+/g, "_")
-                    .replace(/-+/g, "_"),
+                    .replace(/\s+/g, "-")
+                    .replace(/_+/g, "-"),
                 )
               }
             />
