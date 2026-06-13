@@ -39,7 +39,7 @@ Build the web bundle with `VITE_WS_URL` pointing at your server, e.g. `ws://127.
 - **Table**: up to **6 seats** (humans and/or bots). **Dealer** rotates among seated players with coins. **Blind** is the next seat after the dealer in cyclic seat order among players in the hand; the blind **always pays 1 coin** and stays in.
 - **Ante round**: everyone is dealt **4 cards** (2 face-up, 2 face-down). Each non-blind player **fold** (free) or **enter** (pay **1 coin**) when ready (no fixed order); the hand continues once **all** of them have chosen. Then all cards are shown and the best score among players still **in the round** wins the **pot**.
 - **Ties**: the pot is split evenly; any **remainder coins** go to the **lowest seat number** among tied winners first.
-- **Round end**: After each completed or aborted hand, every **connected human who was in that hand** must send **`ack_round_result`** before the next deal (human **Deal** or bot auto-deal). The server exposes this on `RoomSnapshot` as `roundResultPending`, `roundResultRequiredSeats`, and `roundResultAckedSeats` (**`PROTOCOL_VERSION` 3**).
+- **Round end**: After each completed or aborted hand, every **connected human who was in that hand** must send **`ack_round_result`** before the next deal (human **Deal** or bot auto-deal). The server exposes this on `RoomSnapshot` as `roundResultPending`, `roundResultRequiredSeats`, and `roundResultAckedSeats` (**`PROTOCOL_VERSION` 4**).
 
 ## Layout
 

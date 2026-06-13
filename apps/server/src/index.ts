@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
-import type { ClientMessage } from "@ferbli/protocol";
+import type { ClientMessage, LobbyRoomSummary } from "@ferbli/protocol";
 import type { SendFn } from "./room.js";
 import { Room } from "./room.js";
 
@@ -21,6 +21,18 @@ function newRoomCode(): string {
 
 function normalizeCode(code: string): string {
   return code.trim().toUpperCase();
+}
+
+function buildLobbySummaries(): LobbyRoomSummary[] {
+  const out: LobbyRoomSummary[] = [];
+  for (const [code, r] of rooms) {
+    out.push({
+      roomCode: code,
+      humanNames: r.humanSeatDisplayNames(),
+    });
+  }
+  out.sort((a, b) => a.roomCode.localeCompare(b.roomCode));
+  return out;
 }
 
 export async function buildServer() {
@@ -64,6 +76,11 @@ export async function buildServer() {
       }
 
       if (msg.type === "hello") {
+        return;
+      }
+
+      if (msg.type === "list_rooms") {
+        send(JSON.stringify({ type: "room_list", rooms: buildLobbySummaries() }));
         return;
       }
 

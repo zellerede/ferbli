@@ -328,6 +328,15 @@ export class Room {
     return this.hostConnectionId === connectionId;
   }
 
+  /** Display names of seated humans, in seat order (for lobby list). */
+  humanSeatDisplayNames(): string[] {
+    const names: string[] = [];
+    for (const s of this.seats) {
+      if (s?.kind === "human") names.push(s.displayName);
+    }
+    return names;
+  }
+
   /** Seat index that will be dealer for the next hand, or null if play cannot start. */
   peekNextDealerSeat(): number | null {
     const handSeats: number[] = [];

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ClientMessage,
   HandPhase,
+  LobbyRoomSummary,
   PlayerHandSnapshot,
   RoomSnapshot,
 } from "@ferbli/protocol";
@@ -37,8 +38,7 @@ function handRoundLabel(
   if (h.inRound) return "in round";
   if (phase === "ante") {
     if (h.foldedAnte) return "folded";
-    if (blindSeat !== null && h.seatIndex !== blindSeat) return "to decide";
-    return "waiting";
+    return "to decide";
   }
   return "folded";
 }
@@ -121,6 +121,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("You");
   const [joinCode, setJoinCode] = useState("");
+  const [lobbyRooms, setLobbyRooms] = useState<LobbyRoomSummary[] | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const welcomedRef = useRef(false);
   /** Messages sent while the socket is still CONNECTING (e.g. React Strict Mode remount). */
@@ -167,6 +168,7 @@ export function App() {
           connectionId?: string;
           message?: string;
           state?: RoomSnapshot;
+          rooms?: LobbyRoomSummary[];
         };
         try {
           msg = JSON.parse(text) as typeof msg;
@@ -183,6 +185,10 @@ export function App() {
         }
         if (msg.type === "room_state" && msg.state) {
           setRoomState(msg.state);
+          setError(null);
+        }
+        if (msg.type === "room_list" && Array.isArray(msg.rooms)) {
+          setLobbyRooms(msg.rooms);
           setError(null);
         }
         if (msg.type === "error" && msg.message) {
@@ -256,6 +262,18 @@ export function App() {
       }
     };
   }, [send]);
+
+  useEffect(() => {
+    if (!connectionId || roomState !== null) return;
+    const requestList = () => send({ type: "list_rooms" });
+    requestList();
+    const interval = window.setInterval(requestList, 4500);
+    return () => window.clearInterval(interval);
+  }, [connectionId, roomState, send]);
+
+  useEffect(() => {
+    if (roomState !== null) setLobbyRooms(null);
+  }, [roomState]);
 
   const isHost = useMemo(() => {
     if (!connectionId || !roomState?.hostConnectionId) return false;
@@ -411,6 +429,40 @@ export function App() {
             >
               Join room
             </button>
+          </div>
+          <div className="lobby-open-rooms">
+            <h2 className="lobby-open-rooms-title">Open rooms</h2>
+            {lobbyRooms === null ? (
+              <p className="lobby-room-list-status">Loading open rooms…</p>
+            ) : lobbyRooms.length === 0 ? (
+              <p className="lobby-room-list-status">No open rooms right now.</p>
+            ) : (
+              <ul className="lobby-room-list">
+                {lobbyRooms.map((r) => (
+                  <li key={r.roomCode}>
+                    <button
+                      type="button"
+                      className="lobby-room-row"
+                      onClick={() => {
+                        setJoinCode(r.roomCode);
+                        send({
+                          type: "join_room",
+                          roomCode: r.roomCode,
+                          displayName,
+                        });
+                      }}
+                    >
+                      <span className="lobby-room-code">{r.roomCode}</span>
+                      <span className="lobby-room-names">
+                        {r.humanNames.length > 0
+                          ? r.humanNames.join(" · ")
+                          : "No seated humans"}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       )}

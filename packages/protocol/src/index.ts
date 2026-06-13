@@ -1,5 +1,5 @@
 /** Wire format version for client/server compatibility. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Max seats at the table (humans + bots). */
 export const MAX_SEATS = 6;
@@ -61,6 +61,13 @@ export type PlayerHandSnapshot = {
   score: number | null;
 };
 
+/** One row for the lobby browser (open rooms). */
+export type LobbyRoomSummary = {
+  roomCode: string;
+  /** Seated humans in seat order (left to right). */
+  humanNames: string[];
+};
+
 export type RoomSnapshot = {
   protocolVersion: typeof PROTOCOL_VERSION;
   roomCode: string;
@@ -101,6 +108,7 @@ export type RoomSnapshot = {
 
 export type ClientMessage =
   | { type: "hello"; protocolVersion: number }
+  | { type: "list_rooms" }
   | { type: "create_room"; displayName: string }
   | { type: "join_room"; roomCode: string; displayName: string }
   | { type: "leave_room" }
@@ -114,4 +122,5 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: "welcome"; connectionId: string }
   | { type: "error"; message: string }
+  | { type: "room_list"; rooms: LobbyRoomSummary[] }
   | { type: "room_state"; state: RoomSnapshot };
