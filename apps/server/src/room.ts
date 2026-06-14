@@ -1,6 +1,7 @@
 import {
   MAX_SEATS,
   PROTOCOL_VERSION,
+  normalizeGuestDisplayName,
   type Card,
   type ClientMessage,
   type HandPhase,
@@ -434,7 +435,10 @@ export class Room {
     if (existing !== -1) return "Already seated";
     this.seats[seatIndex] = {
       kind: "human",
-      displayName: displayName?.trim() || "Player",
+      displayName:
+        displayName !== undefined && String(displayName).trim() !== ""
+          ? normalizeGuestDisplayName(displayName)
+          : "Player",
       coins: STARTING_COINS,
       connectionId,
     };

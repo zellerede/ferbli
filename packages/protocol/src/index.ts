@@ -1,5 +1,5 @@
 /** Wire format version for client/server compatibility. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 6;
 
 /** Max seats at the table (humans + bots). */
 export const MAX_SEATS = 6;
@@ -111,6 +111,8 @@ export type RoomSnapshot = {
 export type ClientMessage =
   | { type: "hello"; protocolVersion: number }
   | { type: "list_rooms" }
+  /** Guest login only: reserve display name before entering the lobby (must not be in a room). */
+  | { type: "guest_reserve_display_name"; displayName: string }
   | { type: "create_room"; displayName: string }
   | { type: "join_room"; roomCode: string; displayName: string }
   | { type: "leave_room" }
@@ -125,4 +127,14 @@ export type ServerMessage =
   | { type: "welcome"; connectionId: string }
   | { type: "error"; message: string }
   | { type: "room_list"; rooms: LobbyRoomSummary[] }
-  | { type: "room_state"; state: RoomSnapshot };
+  | { type: "room_state"; state: RoomSnapshot }
+  /** Guest name reserved for this connection (canonical display string). */
+  | { type: "guest_display_name_reserved"; displayName: string }
+  /** Guest name could not be reserved (validation or already in use). */
+  | { type: "guest_display_name_rejected"; message: string };
+
+export {
+  guestDisplayNameUniquenessKey,
+  normalizeGuestDisplayName,
+  validateGuestDisplayName,
+} from "./guest-display-name.js";

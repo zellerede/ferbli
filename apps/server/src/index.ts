@@ -2,6 +2,8 @@ import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import type { ClientMessage, LobbyRoomSummary } from "@ferbli/protocol";
+import { normalizeGuestDisplayName } from "@ferbli/protocol";
+import { GuestNameRegistry } from "./guest-name-registry.js";
 import type { SendFn } from "./room.js";
 import { Room } from "./room.js";
 import { randomRoomSlug } from "./room-names.js";
@@ -9,6 +11,7 @@ import { randomRoomSlug } from "./room-names.js";
 type WsRawMessage = string | Buffer | ArrayBuffer | Buffer[];
 
 const rooms = new Map<string, Room>();
+const guestNames = new GuestNameRegistry();
 
 function allocateNewRoomCode(): string {
   for (let i = 0; i < 120; i++) {
@@ -92,7 +95,42 @@ export async function buildServer() {
         return;
       }
 
+      if (msg.type === "guest_reserve_display_name") {
+        if (room) {
+          send(
+            JSON.stringify({
+              type: "guest_display_name_rejected",
+              message:
+                "Leave your current room before choosing a guest nickname.",
+            }),
+          );
+          return;
+        }
+        const claimErr = guestNames.claim(connectionId, msg.displayName);
+        if (claimErr) {
+          send(
+            JSON.stringify({
+              type: "guest_display_name_rejected",
+              message: claimErr,
+            }),
+          );
+          return;
+        }
+        send(
+          JSON.stringify({
+            type: "guest_display_name_reserved",
+            displayName: normalizeGuestDisplayName(msg.displayName),
+          }),
+        );
+        return;
+      }
+
       if (msg.type === "create_room") {
+        const nameErr = guestNames.claim(connectionId, msg.displayName);
+        if (nameErr) {
+          send(JSON.stringify({ type: "error", message: nameErr }));
+          return;
+        }
         if (room) {
           room.removeConnection(connectionId);
           if (room.connections.size === 0) {
@@ -109,6 +147,16 @@ export async function buildServer() {
         const seatErr = r.claimSeat(connectionId, 0, msg.displayName);
         if (seatErr) {
           log.warn({ seatErr, connectionId }, "host auto-seat at 1 failed");
+          guestNames.release(connectionId);
+          rooms.delete(code);
+          room = null;
+          send(
+            JSON.stringify({
+              type: "error",
+              message: "Could not create room (try again).",
+            }),
+          );
+          return;
         }
         r.broadcast();
         return;
@@ -119,6 +167,11 @@ export async function buildServer() {
         const r = rooms.get(code);
         if (!r) {
           send(JSON.stringify({ type: "error", message: "Room not found" }));
+          return;
+        }
+        const nameErr = guestNames.claim(connectionId, msg.displayName);
+        if (nameErr) {
+          send(JSON.stringify({ type: "error", message: nameErr }));
           return;
         }
         if (room && room !== r) {
@@ -152,6 +205,18 @@ export async function buildServer() {
         return;
       }
 
+      if (msg.type === "claim_seat") {
+        const raw =
+          typeof msg.displayName === "string" && msg.displayName.trim() !== ""
+            ? msg.displayName
+            : "Player";
+        const nameErr = guestNames.claim(connectionId, raw);
+        if (nameErr) {
+          send(JSON.stringify({ type: "error", message: nameErr }));
+          return;
+        }
+      }
+
       const err = room.handleMessage(connectionId, msg);
       if (err) {
         send(JSON.stringify({ type: "error", message: err }));
@@ -160,6 +225,7 @@ export async function buildServer() {
     });
 
     socket.on("close", () => {
+      guestNames.release(connectionId);
       if (!room) return;
       room.removeConnection(connectionId);
       if (room.connections.size === 0) {

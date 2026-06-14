@@ -18,6 +18,25 @@ button {
   font: inherit;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button-quiet {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  border: 1px solid #2a3548;
+  background: transparent;
+  color: #8b98ad;
+}
+
+.button-quiet:hover {
+  border-color: #3d4f6c;
+  color: #c5cedd;
+}
+
 input {
   font: inherit;
 }
@@ -196,5 +215,58 @@ input {
 }
 
 .round-result-cancelled h2 {
+  color: #8b98ad;
+}
+
+.login-panel-title {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #c5cedd;
+}
+
+.login-panel-lead {
+  margin: 0 0 0.75rem;
+  font-size: 0.88rem;
+}
+
+.login-panel-secondary {
+  opacity: 0.92;
+}
+
+.login-nickname-row {
+  margin-top: 0.25rem;
+}
+
+.login-nickname-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: #a8b4cc;
+  width: 100%;
+  max-width: 22rem;
+}
+
+.login-nickname-input {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid #2a3548;
+  background: #121a26;
+  color: inherit;
+}
+
+.login-error {
+  margin: 0.5rem 0 0;
+  font-size: 0.88rem;
+}
+
+.login-google-placeholder {
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px dashed #3d4f6c;
+  background: #121a26;
   color: #8b98ad;
 }

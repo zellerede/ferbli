@@ -8,6 +8,14 @@ import type {
 } from "@ferbli/protocol";
 import { PROTOCOL_VERSION } from "@ferbli/protocol";
 import { CardFace } from "./CardFace.js";
+import { LoginScreen } from "./LoginScreen.js";
+import {
+  clearPlayerSession,
+  getNicknameDraftForForm,
+  loadPlayerSession,
+  saveGuestSession,
+  type PlayerSession,
+} from "./player-session.js";
 
 function wsUrlFromLocation(): string {
   const env = import.meta.env.VITE_WS_URL;
@@ -117,16 +125,28 @@ function roundResultForSeat(
 }
 
 export function App() {
+  const [playerSession, setPlayerSession] = useState<PlayerSession | null>(
+    loadPlayerSession,
+  );
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [roomState, setRoomState] = useState<RoomSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState("You");
   const [joinCode, setJoinCode] = useState("");
   const [lobbyRooms, setLobbyRooms] = useState<LobbyRoomSummary[] | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const welcomedRef = useRef(false);
   /** Messages sent while the socket is still CONNECTING (e.g. React Strict Mode remount). */
   const outboundQueueRef = useRef<ClientMessage[]>([]);
+  const playerSessionRef = useRef<PlayerSession | null>(playerSession);
+  playerSessionRef.current = playerSession;
+
+  type GuestReserveResult =
+    | { ok: true; displayName: string }
+    | { ok: false; message: string };
+
+  const guestReserveWaiterRef = useRef<
+    ((result: GuestReserveResult) => void) | null
+  >(null);
 
   const send = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current;
@@ -149,6 +169,25 @@ export function App() {
     );
   }, []);
 
+  const reserveGuestDisplayName = useCallback(
+    (displayName: string): Promise<GuestReserveResult> => {
+      return new Promise((resolve) => {
+        guestReserveWaiterRef.current = resolve;
+        send({ type: "guest_reserve_display_name", displayName });
+        window.setTimeout(() => {
+          if (guestReserveWaiterRef.current === resolve) {
+            guestReserveWaiterRef.current = null;
+            resolve({
+              ok: false,
+              message: "Server did not respond. Try again.",
+            });
+          }
+        }, 15_000);
+      });
+    },
+    [send],
+  );
+
   useEffect(() => {
     let cancelled = false;
     const wsUrl = wsUrlFromLocation();
@@ -168,6 +207,7 @@ export function App() {
           type: string;
           connectionId?: string;
           message?: string;
+          displayName?: string;
           state?: RoomSnapshot;
           rooms?: LobbyRoomSummary[];
         };
@@ -194,6 +234,16 @@ export function App() {
         }
         if (msg.type === "error" && msg.message) {
           setError(msg.message);
+        }
+        if (msg.type === "guest_display_name_reserved" && msg.displayName) {
+          const fn = guestReserveWaiterRef.current;
+          guestReserveWaiterRef.current = null;
+          fn?.({ ok: true, displayName: msg.displayName });
+        }
+        if (msg.type === "guest_display_name_rejected" && msg.message) {
+          const fn = guestReserveWaiterRef.current;
+          guestReserveWaiterRef.current = null;
+          fn?.({ ok: false, message: msg.message });
         }
       };
 
@@ -240,6 +290,12 @@ export function App() {
       if (!stillTracked) return;
       const hadWelcome = welcomedRef.current;
       welcomedRef.current = false;
+      const w = guestReserveWaiterRef.current;
+      guestReserveWaiterRef.current = null;
+      w?.({
+        ok: false,
+        message: "Lost connection to the server.",
+      });
       setConnectionId(null);
       setRoomState(null);
       if (!hadWelcome) {
@@ -248,12 +304,20 @@ export function App() {
         );
       } else {
         setError(
-          "Disconnected from the game server. Refresh the page, then create or join a room again.",
+          playerSessionRef.current
+            ? "Disconnected from the game server. Refresh the page, then create or join a room again."
+            : "Lost connection to the server. Check that the game server is running, then refresh the page.",
         );
       }
     };
     return () => {
       cancelled = true;
+      const w = guestReserveWaiterRef.current;
+      guestReserveWaiterRef.current = null;
+      w?.({
+        ok: false,
+        message: "Lost connection to the server.",
+      });
       setConnectionId(null);
       setRoomState(null);
       welcomedRef.current = false;
@@ -265,12 +329,12 @@ export function App() {
   }, [send]);
 
   useEffect(() => {
-    if (!connectionId || roomState !== null) return;
+    if (!playerSession || !connectionId || roomState !== null) return;
     const requestList = () => send({ type: "list_rooms" });
     requestList();
     const interval = window.setInterval(requestList, 4500);
     return () => window.clearInterval(interval);
-  }, [connectionId, roomState, send]);
+  }, [playerSession, connectionId, roomState, send]);
 
   useEffect(() => {
     if (roomState !== null) setLobbyRooms(null);
@@ -377,6 +441,27 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [roundAckBlocking, acknowledgeRound]);
 
+  const displayName = playerSession?.displayName ?? "";
+
+  const signOutPlayer = useCallback(() => {
+    clearPlayerSession();
+    setPlayerSession(null);
+  }, []);
+
+  if (!playerSession) {
+    return (
+      <LoginScreen
+        initialNickname={getNicknameDraftForForm()}
+        socketReady={connectionId !== null}
+        reserveGuestDisplayName={reserveGuestDisplayName}
+        onGuestContinue={(session) => {
+          saveGuestSession(session.displayName);
+          setPlayerSession(session);
+        }}
+      />
+    );
+  }
+
   if (!connectionId) {
     return (
       <div className="app">
@@ -402,14 +487,13 @@ export function App() {
 
       {!roomState && (
         <div className="panel">
-          <div className="row">
-            <label>
-              Name{" "}
-              <input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-              />
-            </label>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <p className="muted" style={{ margin: 0 }}>
+              Playing as <strong>{displayName}</strong> (guest)
+            </p>
+            <button type="button" className="button-quiet" onClick={signOutPlayer}>
+              Change player
+            </button>
           </div>
           <div className="row" style={{ marginTop: "0.75rem" }}>
             <button type="button" onClick={() => send({ type: "create_room", displayName })}>
