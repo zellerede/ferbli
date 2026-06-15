@@ -1,5 +1,5 @@
 /** Wire format version for client/server compatibility. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** Max seats at the table (humans + bots). */
 export const MAX_SEATS = 6;
@@ -44,8 +44,8 @@ export type HandPhase =
   | "payout";
 
 export type CardSlot = {
-  card: Card;
-  /** During reveal/showdown, private cards become visible to everyone. */
+  /** Null when hidden from this viewer (backs only on the client). */
+  card: Card | null;
   faceUp: boolean;
 };
 
@@ -106,6 +106,13 @@ export type RoomSnapshot = {
   roundResultRequiredSeats: number[];
   /** Human seats that have already acknowledged for this barrier. */
   roundResultAckedSeats: number[];
+  /**
+   * After a tied showdown or all-but-blind folds in the ante, the pot is carried
+   * and the same dealer will replay; each hand seat pays 1 coin on the next deal.
+   */
+  carryOverPot: number | null;
+  /** Dealer seat for the carry-over replay; null when `carryOverPot` is null. */
+  carryOverDealerSeat: number | null;
 };
 
 export type ClientMessage =

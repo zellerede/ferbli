@@ -89,6 +89,12 @@ export class Room {
   /** Human seats that must send `ack_round_result` before the next deal. */
   private roundAckRequired: Set<number> | null = null;
   private roundAcked: Set<number> | null = null;
+  /** After tie or blind-only ante: replay with same dealer after ack. */
+  private carryOver: {
+    pot: number;
+    dealerSeat: number;
+    handSeats: number[];
+  } | null = null;
 
   constructor(code: string, hostConnectionId: string) {
     this.code = code;
@@ -211,12 +217,20 @@ export class Room {
   }
 
   broadcast(): void {
-    const snap = this.snapshot();
-    const payload = JSON.stringify({ type: "room_state", state: snap });
-    for (const [, send] of this.connections) {
-      send(payload);
+    for (const [connectionId, send] of this.connections) {
+      const viewerSeat = this.seatIndexForConnection(connectionId);
+      const snap = this.snapshot(viewerSeat);
+      send(JSON.stringify({ type: "room_state", state: snap }));
     }
     this.maybeAutoDealForBotDealer();
+  }
+
+  /** Human seat for this connection, or null (spectator / not seated). */
+  seatIndexForConnection(connectionId: string): number | null {
+    const idx = this.seats.findIndex(
+      (s) => s?.kind === "human" && s.connectionId === connectionId,
+    );
+    return idx === -1 ? null : idx;
   }
 
   /** If the next dealer is a bot, start the hand here (no human presses Deal). */
@@ -235,7 +249,7 @@ export class Room {
     this.broadcast();
   }
 
-  snapshot(): RoomSnapshot {
+  snapshot(viewerSeat: number | null): RoomSnapshot {
     const seatSnaps: (SeatSnapshot | null)[] = this.seats.map((s) =>
       s
         ? {
@@ -249,18 +263,10 @@ export class Room {
 
     const hands: PlayerHandSnapshot[] = [];
     if (this.activeHand) {
-      const revealAll =
-        this.activeHand.phase === "reveal" ||
-        this.activeHand.phase === "showdown";
       for (const seat of this.activeHand.handSeats) {
         const c = this.activeHand.cards.get(seat);
         if (!c) continue;
-        const cards = [
-          { card: c.public[0]!, faceUp: true },
-          { card: c.public[1]!, faceUp: true },
-          { card: c.private[0]!, faceUp: revealAll },
-          { card: c.private[1]!, faceUp: revealAll },
-        ];
+        const cards = this.slotsForViewer(seat, viewerSeat, c);
         const score =
           this.activeHand.phase === "showdown" && c.inRound
             ? scoreHand([
@@ -294,7 +300,9 @@ export class Room {
       actionSeat: this.getActionSeat(),
       nextDealerSeat: !this.activeHand ? this.peekNextDealerSeat() : null,
       hands,
-      showdownHands: this.showdownHands,
+      showdownHands: this.showdownHands
+        ? this.maskShowdownHands(this.showdownHands, viewerSeat)
+        : null,
       lastMessage: this.lastMessage,
       roundResultPending: this.roundAckWaiting(),
       roundResultRequiredSeats: this.roundAckRequired
@@ -303,7 +311,44 @@ export class Room {
       roundResultAckedSeats: this.roundAcked
         ? [...this.roundAcked].sort((a, b) => a - b)
         : [],
+      carryOverPot: this.carryOver?.pot ?? null,
+      carryOverDealerSeat: this.carryOver?.dealerSeat ?? null,
     };
+  }
+
+  private slotsForViewer(
+    seat: number,
+    viewerSeat: number | null,
+    c: SeatCards,
+  ): PlayerHandSnapshot["cards"] {
+    const owner = viewerSeat !== null && viewerSeat === seat;
+    return [
+      { card: owner ? c.public[0]! : null, faceUp: owner },
+      { card: owner ? c.public[1]! : null, faceUp: owner },
+      { card: owner ? c.private[0]! : null, faceUp: owner },
+      { card: owner ? c.private[1]! : null, faceUp: owner },
+    ];
+  }
+
+  private maskShowdownHands(
+    hands: PlayerHandSnapshot[],
+    viewerSeat: number | null,
+  ): PlayerHandSnapshot[] {
+    return hands.map((h) => ({
+      ...h,
+      cards: this.slotsFromShowdownRow(h.seatIndex, viewerSeat, h.cards),
+    }));
+  }
+
+  /** showdownHands rows were stored with full cards; strip others' ranks. */
+  private slotsFromShowdownRow(
+    seat: number,
+    viewerSeat: number | null,
+    slots: PlayerHandSnapshot["cards"],
+  ): PlayerHandSnapshot["cards"] {
+    const owner = viewerSeat !== null && viewerSeat === seat;
+    if (owner) return slots;
+    return slots.map(() => ({ card: null, faceUp: false }));
   }
 
   getActionSeat(): number | null {
@@ -340,6 +385,13 @@ export class Room {
 
   /** Seat index that will be dealer for the next hand, or null if play cannot start. */
   peekNextDealerSeat(): number | null {
+    if (this.carryOver) {
+      const ok = this.carryOver.handSeats.filter(
+        (s) => this.seats[s] && this.seats[s]!.coins >= 1,
+      );
+      if (ok.length < 2) return null;
+      return this.carryOver.dealerSeat;
+    }
     const handSeats: number[] = [];
     for (let i = 0; i < MAX_SEATS; i++) {
       const s = this.seats[i];
@@ -451,6 +503,13 @@ export class Room {
     );
     if (idx === -1) return;
 
+    if (this.carryOver?.handSeats.includes(idx)) {
+      this.carryOver = null;
+      if (!this.activeHand) {
+        this.lastMessage = "Carry-over replay cancelled: a player left.";
+      }
+    }
+
     this.waiveAckForSeatIfWaiting(idx);
 
     if (this.activeHand) {
@@ -477,6 +536,12 @@ export class Room {
     } else {
       const s = this.seats[seatIndex];
       if (!s || s.kind !== "bot") return "No bot there";
+      if (this.carryOver?.handSeats.includes(seatIndex)) {
+        this.carryOver = null;
+        if (!this.activeHand) {
+          this.lastMessage = "Carry-over replay cancelled: bot removed.";
+        }
+      }
       if (this.activeHand) {
         const hand = this.activeHand;
         this.lastMessage = "Hand aborted: bot removed.";
@@ -496,6 +561,11 @@ export class Room {
       return "Wait until every player has acknowledged the last round.";
     }
     this.showdownHands = null;
+
+    if (this.carryOver) {
+      return this.startCarryReplayHand();
+    }
+
     const handSeats: number[] = [];
     for (let i = 0; i < MAX_SEATS; i++) {
       const s = this.seats[i];
@@ -542,6 +612,64 @@ export class Room {
     };
     this.phase = "ante";
     this.lastMessage = `Hand started. Dealer seat ${dealerSeat + 1}, blind seat ${blindSeat + 1}.`;
+
+    return null;
+  }
+
+  /**
+   * Same dealer as the carried hand; every seat in the prior `handSeats` pays 1;
+   * pot becomes carried pot + one ante per seat.
+   */
+  private startCarryReplayHand(): string | null {
+    const carry = this.carryOver!;
+    const { pot, dealerSeat, handSeats } = carry;
+    for (const seat of handSeats) {
+      const p = this.seats[seat];
+      if (!p || p.coins < 1) {
+        this.carryOver = null;
+        return "Cannot replay carry-over: every player needs 1 coin.";
+      }
+    }
+
+    for (const seat of handSeats) {
+      this.seats[seat]!.coins -= 1;
+    }
+    this.carryOver = null;
+
+    this.lastDealerSeat = dealerSeat;
+    const blindSeat = blindForDealer(handSeats, dealerSeat);
+
+    const deck = shuffle(createDeck());
+    let k = 0;
+    const cards = new Map<number, SeatCards>();
+    for (const seat of handSeats) {
+      const pub: [Card, Card] = [deck[k++]!, deck[k++]!];
+      const priv: [Card, Card] = [deck[k++]!, deck[k++]!];
+      cards.set(seat, {
+        public: pub,
+        private: priv,
+        inRound: false,
+        foldedAnte: false,
+      });
+    }
+
+    const blindCards = cards.get(blindSeat)!;
+    blindCards.inRound = true;
+
+    const anteOrder = nextCircularActors(handSeats, blindSeat);
+    const newPot = pot + handSeats.length;
+
+    this.activeHand = {
+      dealerSeat,
+      blindSeat,
+      handSeats,
+      anteOrder,
+      cards,
+      pot: newPot,
+      phase: "ante",
+    };
+    this.phase = "ante";
+    this.lastMessage = `Carry-over replay: dealer seat ${dealerSeat + 1}, blind seat ${blindSeat + 1}. Pot is ${newPot} coins.`;
 
     return null;
   }
@@ -661,20 +789,40 @@ export class Room {
 
     const best = Math.max(...contenders.map((c) => c.score));
     const winners = contenders.filter((c) => c.score === best);
-    const pot = hand.pot;
-    const base = Math.floor(pot / winners.length);
-    let remainder = pot - base * winners.length;
+    const tieShowdown = winners.length > 1;
 
-    const sortedWinners = [...winners].sort((a, b) => a.seat - b.seat);
-    const winnerNames = sortedWinners.map((w) => this.seats[w.seat]?.displayName);
-    for (const w of sortedWinners) {
-      const add = base + (remainder > 0 ? 1 : 0);
-      if (remainder > 0) remainder -= 1;
-      const pl = this.seats[w.seat];
-      if (pl) pl.coins += add;
+    const onlyBlindSurvives =
+      contenders.length === 1 &&
+      contenders[0]!.seat === hand.blindSeat &&
+      hand.handSeats.every((s) => {
+        if (s === hand.blindSeat) return true;
+        const sc = hand.cards.get(s);
+        return !!sc && !sc.inRound && sc.foldedAnte;
+      });
+
+    if (tieShowdown || onlyBlindSurvives) {
+      this.carryOver = {
+        pot: hand.pot,
+        dealerSeat: hand.dealerSeat,
+        handSeats: [...hand.handSeats],
+      };
+      this.lastMessage = tieShowdown
+        ? `Tied at ${best} pts. The pot is carried; same dealer will replay after everyone pays 1 coin on the next deal.`
+        : `Only the blind remains; the pot is carried. Everyone pays 1 coin — same dealer deals again.`;
+      this.beginRoundAck(hand);
+      this.activeHand = null;
+      this.phase = "idle";
+      return;
     }
 
-    this.lastMessage = `Showdown: winner is ${winnerNames.join(", ")} with ${best} pts. Pot ${pot} is taken.`;
+    this.carryOver = null;
+    const pot = hand.pot;
+    const w = winners[0]!;
+    const pl = this.seats[w.seat];
+    if (pl) pl.coins += pot;
+
+    const winnerName = this.seats[w.seat]?.displayName;
+    this.lastMessage = `Showdown: winner is ${winnerName ?? "Seat " + (w.seat + 1)} with ${best} pts. Pot ${pot} is taken.`;
     this.beginRoundAck(hand);
     this.activeHand = null;
     this.phase = "idle";

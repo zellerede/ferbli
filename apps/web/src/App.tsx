@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   ClientMessage,
   HandPhase,
@@ -6,7 +6,7 @@ import type {
   PlayerHandSnapshot,
   RoomSnapshot,
 } from "@ferbli/protocol";
-import { PROTOCOL_VERSION } from "@ferbli/protocol";
+import { MAX_SEATS, PROTOCOL_VERSION } from "@ferbli/protocol";
 import { CardFace } from "./CardFace.js";
 import { LoginScreen } from "./LoginScreen.js";
 import {
@@ -37,6 +37,28 @@ function wireDataToStringSync(data: unknown): string {
   return String(data);
 }
 
+function coinSeatIndices(roomState: RoomSnapshot): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < MAX_SEATS; i++) {
+    const s = roomState.seats[i];
+    if (s && s.coins >= 1) out.push(i);
+  }
+  out.sort((a, b) => a - b);
+  return out;
+}
+
+/** Next blind after dealer, among seats with 1+ coin (matches server blind rule). */
+function nextBlindAfterDealer(
+  dealerSeat: number,
+  coinSeats: number[],
+): number | null {
+  if (coinSeats.length < 2) return null;
+  const sorted = [...coinSeats].sort((a, b) => a - b);
+  const idx = sorted.indexOf(dealerSeat);
+  if (idx === -1) return null;
+  return sorted[(idx + 1) % sorted.length]!;
+}
+
 /** Status line during / after a hand (ante vs later phases differ). */
 function handRoundLabel(
   phase: HandPhase,
@@ -50,6 +72,135 @@ function handRoundLabel(
     return "waiting";
   }
   return "folded";
+}
+
+function renderGameTableSeat(opts: {
+  seatIdx: number;
+  roomState: RoomSnapshot;
+  handsToShow: PlayerHandSnapshot[];
+  mySeat: number | null;
+  isHost: boolean;
+  displayName: string;
+  send: (m: ClientMessage) => void;
+}): ReactNode {
+  const { seatIdx, roomState, handsToShow, mySeat, isHost, displayName, send } = opts;
+  const seat = roomState.seats[seatIdx] ?? null;
+  const isHostSeat =
+    !!roomState.hostConnectionId &&
+    seat?.connectionId === roomState.hostConnectionId;
+  const hand = handsToShow.find((h) => h.seatIndex === seatIdx) ?? null;
+  const inHand = roomState.handSeats.includes(seatIdx);
+  const isViewerOwner = mySeat !== null && mySeat === seatIdx;
+  const isAnte = roomState.phase === "ante";
+
+  const dealPreviewPills =
+    roomState.phase === "idle" &&
+    !roomState.roundResultPending &&
+    roomState.nextDealerSeat !== null;
+  const pillDealerSeat: number | null = dealPreviewPills
+    ? roomState.nextDealerSeat
+    : roomState.dealerSeat;
+  const pillBlindSeat: number | null = dealPreviewPills
+    ? nextBlindAfterDealer(
+        roomState.nextDealerSeat!,
+        coinSeatIndices(roomState),
+      )
+    : roomState.blindSeat;
+
+  return (
+    <div
+      className={`game-table-seat ${isHostSeat ? "host" : ""} ${mySeat === seatIdx ? "is-me" : ""} ${pillDealerSeat === seatIdx ? "is-dealer" : ""} ${pillBlindSeat === seatIdx ? "is-blind" : ""} ${inHand ? "in-hand" : ""}`}
+    >
+      <div className="game-table-seat-head">
+        {pillDealerSeat === seatIdx ? (
+          <span className="game-table-dealer-pill">Dealer</span>
+        ) : null}
+        {pillBlindSeat === seatIdx ? (
+          <span className="game-table-blind-pill">Blind</span>
+        ) : null}
+      </div>
+      {seat ? (
+        <div className="game-table-seat-name">
+          <strong className="game-table-player-name">{seat.displayName}</strong>
+        </div>
+      ) : (
+        <div className="muted game-table-seat-name">Open seat</div>
+      )}
+      {seat ? (
+        <div className="game-table-seat-meta">
+          <span className="muted">
+            ({seat.kind}) · {seat.coins} coins
+          </span>
+        </div>
+      ) : null}
+      {hand && inHand && isAnte ? (
+        <>
+          <div className="muted game-table-hand-status">
+            {handRoundLabel(roomState.phase, hand, roomState.blindSeat)}
+          </div>
+          {isViewerOwner ? (
+            <div className="game-table-card-zones">
+              <div className="game-table-zone game-table-zone-hand">
+                <span className="game-table-zone-label">In hand</span>
+                <div className="card-row game-table-card-row">
+                  <CardFace
+                    key="o0"
+                    card={hand.cards[0]?.card ?? null}
+                    faceDown={!hand.cards[0]?.faceUp}
+                  />
+                  <CardFace
+                    key="o1"
+                    card={hand.cards[1]?.card ?? null}
+                    faceDown={!hand.cards[1]?.faceUp}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : hand ? (
+        <div className="muted game-table-hand-status">
+          {handRoundLabel(roomState.phase, hand, roomState.blindSeat)}
+        </div>
+      ) : (
+        <div className="muted game-table-no-cards">—</div>
+      )}
+      <div className="row game-table-seat-actions">
+        {!seat && mySeat === null && roomState.phase === "idle" && (
+          <button
+            type="button"
+            onClick={() =>
+              send({
+                type: "claim_seat",
+                seatIndex: seatIdx,
+                displayName,
+              })
+            }
+          >
+            Sit
+          </button>
+        )}
+        {isHost && !seat && roomState.phase === "idle" && (
+          <button
+            type="button"
+            onClick={() => send({ type: "set_bot", seatIndex: seatIdx, enabled: true })}
+          >
+            Bot
+          </button>
+        )}
+        {isHost && seat?.kind === "bot" && roomState.phase === "idle" && (
+          <button
+            type="button"
+            onClick={() =>
+              send({ type: "set_bot", seatIndex: seatIdx, enabled: false })
+            }
+          >
+            −Bot
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 type RoundResultModal = {
@@ -76,6 +227,9 @@ function roundResultForSeat(
 
   const mine = hands.find((h) => h.seatIndex === mySeat);
   if (!mine) return null;
+
+  const potCarried =
+    roomState.carryOverPot !== null && roomState.carryOverDealerSeat !== null;
 
   const inShowdown = hands.filter((h) => h.inRound && h.score !== null);
   if (inShowdown.length === 0) {
@@ -106,14 +260,35 @@ function roundResultForSeat(
     };
   }
 
+  if (potCarried) {
+    if (mine.score === best && winnerCount > 1) {
+      return {
+        variant: "lose",
+        title: "Tied for best",
+        detail:
+          "There is no split pot — the pot stays on the table. Everyone pays 1 coin and the same dealer runs an extra round.",
+      };
+    }
+    if (mine.score === best) {
+      return {
+        variant: "lose",
+        title: "Pot carries",
+        detail:
+          "No single winner this round. The pot stays; everyone pays 1 coin and the same dealer deals again.",
+      };
+    }
+    return {
+      variant: "lose",
+      title: "Pot carries",
+      detail: `Your score was ${mine.score}; the best at the table was ${best}. The pot stays for a replay.`,
+    };
+  }
+
   if (mine.score === best) {
-    const tie = winnerCount > 1;
     return {
       variant: "win",
-      title: tie ? "You won this round (split pot)" : "You won this round",
-      detail: tie
-        ? `Your score of ${mine.score} tied for best among ${winnerCount} players.`
-        : `Your score of ${mine.score} took the pot.`,
+      title: "You won this round",
+      detail: `Your score of ${mine.score} took the pot.`,
     };
   }
 
@@ -364,10 +539,26 @@ export function App() {
     return seat.connectionId === connectionId;
   }, [connectionId, roomState]);
 
+  /** Active hand only — showdown stays in the round-result modal, not on the table. */
   const handsToShow = useMemo(() => {
     if (!roomState) return [];
-    if (roomState.hands.length > 0) return roomState.hands;
-    return roomState.showdownHands ?? [];
+    return roomState.hands;
+  }, [roomState]);
+
+  /** Blind for the next hand when idle and a deal is allowed (matches dealer pills). */
+  const idleNextBlindSeat = useMemo(() => {
+    if (
+      !roomState ||
+      roomState.phase !== "idle" ||
+      roomState.roundResultPending ||
+      roomState.nextDealerSeat === null
+    ) {
+      return null;
+    }
+    return nextBlindAfterDealer(
+      roomState.nextDealerSeat,
+      coinSeatIndices(roomState),
+    );
   }, [roomState]);
 
   /** During ante, this seat still needs a fold/enter choice (blind is automatic). */
@@ -480,9 +671,9 @@ export function App() {
       <h1>Ferbli</h1>
       {error ? <p className="error">{error}</p> : null}
       <p className="muted">
-        German 32-card room play · dealer rotates · blind pays 1 coin · others
-        fold or pay 1 after seeing two up-cards · best same-suit combo wins the
-        pot.
+        German 32-card table game: blind pays 1 coin; others fold or pay 1 after
+        seeing their own up-cards (open cards stay private to each player). Same
+        dealer replays when the pot carries (tie or all others fold in the ante).
       </p>
 
       {!roomState && (
@@ -577,8 +768,9 @@ export function App() {
               )
             ) : (
               <p className="muted">
-                You are in seat {mySeat + 1}. Coins:{" "}
-                {roomState.seats[mySeat]?.coins ?? "—"}
+                Seated as <strong>{roomState.seats[mySeat]?.displayName ?? displayName}</strong>
+                {" · "}
+                {roomState.seats[mySeat]?.coins ?? "—"} coins
               </p>
             )}
             <div className="row" style={{ marginTop: "0.75rem" }}>
@@ -599,143 +791,162 @@ export function App() {
             </div>
           </div>
 
-          <div className="panel">
-            <h2 style={{ marginTop: 0 }}>Seats</h2>
-            <div className="seat-grid">
-              {roomState.seats.map((seat, i) => (
-                <div
-                  key={i}
-                  className={`seat ${roomState.hostConnectionId && seat?.connectionId === roomState.hostConnectionId ? "host" : ""}`}
-                >
-                  <div>
-                    <strong>Seat {i + 1}</strong>
+          <div className="panel game-table-panel">
+            <h2 style={{ marginTop: 0 }}>Table</h2>
+            <div className="game-table-wrap">
+              <div className="game-table-row game-table-row-top">
+                {[3, 4, 5].map((seatIdx) => (
+                  <div key={seatIdx} className="game-table-seat-wrap">
+                    {renderGameTableSeat({
+                      seatIdx,
+                      roomState,
+                      handsToShow,
+                      mySeat,
+                      isHost,
+                      displayName,
+                      send,
+                    })}
                   </div>
-                  {seat ? (
-                    <div>
-                      {seat.displayName}{" "}
-                      <span className="muted">
-                        ({seat.kind}) · {seat.coins} coins
-                      </span>
+                ))}
+              </div>
+              <div className="game-table-row game-table-row-mid">
+                <div className="game-table-seat-wrap">
+                  {renderGameTableSeat({
+                    seatIdx: 2,
+                    roomState,
+                    handsToShow,
+                    mySeat,
+                    isHost,
+                    displayName,
+                    send,
+                  })}
+                </div>
+                <div className="game-table-felt">
+                  <div className="game-table-pot">
+                    <span className="game-table-pot-label">Pot</span>
+                    <strong className="game-table-pot-value">{roomState.pot}</strong>
+                  </div>
+                  {roomState.phase === "ante" &&
+                  mySeat !== null &&
+                  roomState.handSeats.includes(mySeat) &&
+                  handsToShow.some((h) => h.seatIndex === mySeat) ? (
+                    <div
+                      className="game-table-felt-holes"
+                      aria-label="Your hole cards on the table"
+                    >
+                      <CardFace key="my-hole-0" card={null} faceDown />
+                      <CardFace key="my-hole-1" card={null} faceDown />
                     </div>
-                  ) : (
-                    <div className="muted">Empty</div>
-                  )}
-                  <div className="row" style={{ marginTop: "0.5rem" }}>
-                    {!seat && mySeat === null && roomState.phase === "idle" && (
+                  ) : null}
+                  {canDeal ? (
+                    <div className="row game-table-felt-actions">
+                      <button type="button" onClick={() => send({ type: "start_hand" })}>
+                        Deal
+                      </button>
+                    </div>
+                  ) : null}
+                  {roomState.phase === "ante" && myAnteNeedsChoice ? (
+                    <div className="row game-table-felt-actions">
                       <button
                         type="button"
-                        onClick={() =>
-                          send({
-                            type: "claim_seat",
-                            seatIndex: i,
-                            displayName,
-                          })
-                        }
+                        onClick={() => send({ type: "hand_action", action: "enter" })}
                       >
-                        Sit here
+                        Enter (pay 1 coin)
                       </button>
-                    )}
-                    {isHost && !seat && roomState.phase === "idle" && (
                       <button
                         type="button"
-                        onClick={() =>
-                          send({ type: "set_bot", seatIndex: i, enabled: true })
-                        }
+                        onClick={() => send({ type: "hand_action", action: "fold" })}
                       >
-                        Add bot
+                        Fold
                       </button>
-                    )}
-                    {isHost &&
-                      seat?.kind === "bot" &&
-                      roomState.phase === "idle" && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          send({ type: "set_bot", seatIndex: i, enabled: false })
-                        }
-                      >
-                        Remove bot
-                      </button>
-                    )}
-                  </div>
+                    </div>
+                  ) : null}
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="panel">
-            <h2 style={{ marginTop: 0 }}>Hand</h2>
-            <div className="row">
-              <span>Phase: {roomState.phase}</span>
-              <span className="muted">Pot: {roomState.pot}</span>
-              {roomState.dealerSeat !== null && (
-                <span className="muted">Dealer: seat {roomState.dealerSeat + 1}</span>
-              )}
-              {roomState.blindSeat !== null && (
-                <span className="muted">Blind: seat {roomState.blindSeat + 1}</span>
-              )}
-              {roomState.phase === "ante" && (
-                <span className="muted">
-                  Ante: each non-blind player folds or enters (any order).
-                </span>
-              )}
-            </div>
-            {roundAckWaitingNotice ? (
-              <p className="muted" style={{ marginTop: "0.75rem" }}>
-                {roundAckWaitingNotice}
-              </p>
-            ) : null}
-            {canDeal && (
-              <div className="row" style={{ marginTop: "0.75rem" }}>
-                <button type="button" onClick={() => send({ type: "start_hand" })}>
-                  Deal
-                </button>
+                <div className="game-table-seat-wrap">
+                  {renderGameTableSeat({
+                    seatIdx: 0,
+                    roomState,
+                    handsToShow,
+                    mySeat,
+                    isHost,
+                    displayName,
+                    send,
+                  })}
+                </div>
               </div>
-            )}
-            {roomState.phase === "ante" && myAnteNeedsChoice && (
-                <div className="row" style={{ marginTop: "0.75rem" }}>
-                  <button type="button" onClick={() => send({ type: "hand_action", action: "enter" })}>
-                    Enter (pay 1 coin)
-                  </button>
-                  <button type="button" onClick={() => send({ type: "hand_action", action: "fold" })}>
-                    Fold
-                  </button>
+              <div className="game-table-row game-table-row-bot">
+                <div className="game-table-seat-spacer" aria-hidden />
+                <div className="game-table-seat-wrap">
+                  {renderGameTableSeat({
+                    seatIdx: 1,
+                    roomState,
+                    handsToShow,
+                    mySeat,
+                    isHost,
+                    displayName,
+                    send,
+                  })}
                 </div>
-              )}
-            {roomState.lastMessage && (
-              <p style={{ marginTop: "0.75rem" }}>{roomState.lastMessage}</p>
-            )}
-          </div>
+                <div className="game-table-seat-spacer" aria-hidden />
+              </div>
+            </div>
 
-          <div className="panel">
-            <h2 style={{ marginTop: 0 }}>Cards</h2>
-            {handsToShow.length === 0 && (
-              <p className="muted">
-                {roomState.roundResultPending
-                  ? "Waiting for all players in the last round to acknowledge before the next deal."
-                  : "No active hand. The dealer presses Deal when ready."}
-              </p>
-            )}
-            {handsToShow.map((h) => (
-              <div key={h.seatIndex} style={{ marginBottom: "1rem" }}>
-                <div>
-                  <strong>Seat {h.seatIndex + 1}</strong>{" "}
+            <div className="game-table-controls">
+              {roomState.carryOverPot != null ? (
+                <p className="game-table-carry muted">
+                  Carry-over: next deal each hand seat pays 1 coin (same dealer).
+                </p>
+              ) : null}
+              <div className="game-table-meta row">
+                <span>Phase: {roomState.phase}</span>
+                {roomState.dealerSeat !== null ? (
                   <span className="muted">
-                    {handRoundLabel(roomState.phase, h, roomState.blindSeat)} · score{" "}
-                    {h.score ?? "—"}
+                    Dealer:{" "}
+                    {roomState.seats[roomState.dealerSeat]?.displayName ?? "—"}
                   </span>
-                </div>
-                <div className="card-row" style={{ marginTop: "0.35rem" }}>
-                  {h.cards.map((slot, idx) => (
-                    <CardFace
-                      key={idx}
-                      card={slot.card}
-                      faceDown={!slot.faceUp}
-                    />
-                  ))}
-                </div>
+                ) : roomState.phase === "idle" &&
+                  roomState.nextDealerSeat !== null ? (
+                  <span className="muted">
+                    Next dealer:{" "}
+                    {roomState.seats[roomState.nextDealerSeat]?.displayName ?? "—"}
+                  </span>
+                ) : null}
+                {roomState.blindSeat !== null ? (
+                  <span className="muted">
+                    Blind:{" "}
+                    {roomState.seats[roomState.blindSeat]?.displayName ?? "—"}
+                  </span>
+                ) : idleNextBlindSeat !== null ? (
+                  <span className="muted">
+                    Next blind:{" "}
+                    {roomState.seats[idleNextBlindSeat]?.displayName ?? "—"}
+                  </span>
+                ) : null}
               </div>
-            ))}
+              {roomState.phase === "ante" ? (
+                <p className="muted game-table-hint">
+                  Ante: non-blind players fold or enter (any order).
+                </p>
+              ) : null}
+              {roundAckWaitingNotice ? (
+                <p className="muted game-table-hint">{roundAckWaitingNotice}</p>
+              ) : null}
+              {handsToShow.length === 0 && !roomState.roundResultPending ? (
+                <p className="muted game-table-hint">
+                  No active hand. The dealer presses Deal when ready.
+                </p>
+              ) : null}
+              {handsToShow.length === 0 && roomState.roundResultPending ? (
+                <p className="muted game-table-hint">
+                  Waiting for all players in the last round to acknowledge before the next
+                  deal.
+                </p>
+              ) : null}
+              {roomState.lastMessage &&
+              !roomState.lastMessage.toLowerCase().includes("showdown") ? (
+                <p className="game-table-lastmsg">{roomState.lastMessage}</p>
+              ) : null}
+            </div>
           </div>
         </>
       )}
