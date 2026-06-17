@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
+  Card,
   ClientMessage,
   HandPhase,
   HandScore,
@@ -8,6 +9,7 @@ import type {
   RoomSnapshot,
 } from "@ferbli/protocol";
 import { MAX_SEATS, PROTOCOL_VERSION } from "@ferbli/protocol";
+import { compareHands, handScoreTier } from "@ferbli/rules";
 import { CardFace } from "./CardFace.js";
 import { LoginScreen } from "./LoginScreen.js";
 import {
@@ -230,6 +232,24 @@ function abortedRoundMessage(lastMessage: string | null): boolean {
   return t.includes("aborted") || t.includes("player left");
 }
 
+/** Same tier + display score only (no kicker); used if face-up cards are incomplete. */
+function compareScoresRough(a: HandScore, b: HandScore): number {
+  const t = handScoreTier(a) - handScoreTier(b);
+  if (t !== 0) return t;
+  return a.score - b.score;
+}
+
+function cardsFromFaceUpSlots(
+  slots: PlayerHandSnapshot["cards"],
+): Card[] | null {
+  const out: Card[] = [];
+  for (const s of slots) {
+    if (!s.faceUp || s.card === null) return null;
+    out.push(s.card);
+  }
+  return out.length === 4 ? out : null;
+}
+
 function roundResultForSeat(
   roomState: RoomSnapshot,
   mySeat: number,
@@ -259,13 +279,53 @@ function roundResultForSeat(
     };
   }
 
-  const best = Math.max(...inShowdown.map((h) => h.score!.strength));
-  const winnerCount = inShowdown.filter(
-    (h) => h.score!.strength === best,
-  ).length;
-  const bestHandExample = inShowdown.find(
-    (h) => h.score!.strength === best,
-  )?.score;
+  const rows: { hand: (typeof inShowdown)[0]; cards: Card[] }[] = [];
+  for (const h of inShowdown) {
+    const cards = cardsFromFaceUpSlots(h.cards);
+    if (cards) rows.push({ hand: h, cards });
+  }
+  const useCardOrder =
+    rows.length > 0 && rows.length === inShowdown.length;
+
+  let bestScore: HandScore;
+  let winnerCount: number;
+  let bestHandExample: HandScore | undefined;
+  let bestRow: (typeof rows)[0] | null = null;
+
+  if (useCardOrder) {
+    bestRow = rows[0]!;
+    for (const r of rows.slice(1)) {
+      if (compareHands(r.cards, bestRow.cards) > 0) bestRow = r;
+    }
+    bestScore = bestRow.hand.score!;
+    winnerCount = rows.filter(
+      (r) => compareHands(r.cards, bestRow!.cards) === 0,
+    ).length;
+    bestHandExample = rows.find(
+      (r) => compareHands(r.cards, bestRow!.cards) === 0,
+    )?.hand.score ?? undefined;
+  } else {
+    bestScore = inShowdown.reduce(
+      (b, h) =>
+        compareScoresRough(h.score!, b) > 0 ? h.score! : b,
+      inShowdown[0]!.score!,
+    );
+    winnerCount = inShowdown.filter(
+      (h) => compareScoresRough(h.score!, bestScore) === 0,
+    ).length;
+    bestHandExample =
+      inShowdown.find((h) => compareScoresRough(h.score!, bestScore) === 0)
+        ?.score ?? undefined;
+  }
+
+  const mineCards = cardsFromFaceUpSlots(mine.cards);
+  const mineIsBest = useCardOrder
+    ? !!(
+        mineCards &&
+        bestRow &&
+        compareHands(mineCards, bestRow.cards) === 0
+      )
+    : compareScoresRough(mine.score!, bestScore) === 0;
 
   if (!mine.inRound || mine.score === null) {
     return {
@@ -278,7 +338,7 @@ function roundResultForSeat(
   }
 
   if (potCarried) {
-    if (mine.score.strength === best && winnerCount > 1) {
+    if (mineIsBest && winnerCount > 1) {
       return {
         variant: "lose",
         title: "Tied for best",
@@ -286,7 +346,7 @@ function roundResultForSeat(
           "There is no split pot — the pot stays on the table. Everyone pays 1 coin and the same dealer runs an extra round.",
       };
     }
-    if (mine.score.strength === best) {
+    if (mineIsBest) {
       return {
         variant: "lose",
         title: "Pot carries",
@@ -301,7 +361,7 @@ function roundResultForSeat(
     };
   }
 
-  if (mine.score.strength === best) {
+  if (mineIsBest) {
     return {
       variant: "win",
       title: "You won this round",

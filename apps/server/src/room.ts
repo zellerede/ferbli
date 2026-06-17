@@ -5,11 +5,13 @@ import {
   type Card,
   type ClientMessage,
   type HandPhase,
+  type HandScore,
   type PlayerHandSnapshot,
   type RoomSnapshot,
   type SeatSnapshot,
 } from "@ferbli/protocol";
 import {
+  compareHands,
   createDeck,
   pickRandomAnteAction,
   scoreHand,
@@ -768,7 +770,7 @@ export class Room {
     }
     this.showdownHands = revealSnapshots;
 
-    const contenders: { seat: number; score: ReturnType<typeof scoreHand> }[] =
+    const contenders: { seat: number; cards: Card[]; score: HandScore }[] =
       [];
     for (const seat of hand.handSeats) {
       const sc = hand.cards.get(seat);
@@ -777,7 +779,11 @@ export class Room {
         ...sc.public,
         ...sc.private,
       ];
-      contenders.push({ seat, score: scoreHand(all) });
+      contenders.push({
+        seat,
+        cards: all,
+        score: scoreHand(all),
+      });
     }
 
     if (contenders.length === 0) {
@@ -788,8 +794,14 @@ export class Room {
       return;
     }
 
-    const best = Math.max(...contenders.map((c) => c.score.strength));
-    const winners = contenders.filter((c) => c.score.strength === best);
+    const bestEntry = contenders.reduce((a, b) =>
+      compareHands(b.cards, a.cards) > 0 ? b : a,
+    );
+    const best = bestEntry.score;
+    const bestLabel = `${best.figure} ${best.score}`;
+    const winners = contenders.filter(
+      (c) => compareHands(c.cards, bestEntry.cards) === 0,
+    );
     const tieShowdown = winners.length > 1;
 
     const onlyBlindSurvives =
@@ -808,7 +820,7 @@ export class Room {
         handSeats: [...hand.handSeats],
       };
       this.lastMessage = tieShowdown
-        ? `Tied at ${best} pts. The pot is carried; same dealer will replay after everyone pays 1 coin on the next deal.`
+        ? `Tied at ${bestLabel}. The pot is carried; same dealer will replay after everyone pays 1 coin on the next deal.`
         : `Only the blind remains; the pot is carried. Everyone pays 1 coin — same dealer deals again.`;
       this.beginRoundAck(hand);
       this.activeHand = null;
@@ -823,7 +835,7 @@ export class Room {
     if (pl) pl.coins += pot;
 
     const winnerName = this.seats[w.seat]?.displayName;
-    this.lastMessage = `Showdown: winner is ${winnerName ?? "Seat " + (w.seat + 1)} with ${best} pts. Pot ${pot} is taken.`;
+    this.lastMessage = `Showdown: winner is ${winnerName ?? "Seat " + (w.seat + 1)} with ${bestLabel}. Pot ${pot} is taken.`;
     this.beginRoundAck(hand);
     this.activeHand = null;
     this.phase = "idle";

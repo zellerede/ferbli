@@ -12,7 +12,7 @@ const RANKS: Rank[] = [
   "seven",
 ];
 
-/** Ace (high) = 8 … seven = 1 — for tiebreaks and tier sub-scores. */
+/** Ace (high) = 8 … seven = 1 — for kicker ordering and tier sub-scores. */
 export function rankStrength(rank: Rank): number {
   return RANKS.indexOf(rank) === -1 ? 0 : 8 - RANKS.indexOf(rank);
 }
@@ -122,37 +122,54 @@ function bestSameSuitCombination(cards: Card[]): SuitCombo | null {
   return best;
 }
 
-function suiteComboStrength(combo: SuitCombo, allCards: Card[]): number {
-  const base = combo.count >= 3 ? 40_000_000 : 30_000_000;
-  const used = new Set(combo.suitedCards.map((c) => `${c.suit}:${c.rank}`));
-  const rest = allCards.filter((c) => !used.has(`${c.suit}:${c.rank}`));
-  const kickerPart = encodeHighCard(rest);
-  return base + combo.sum * 100_000 + (kickerPart - 10_000_000);
+/**
+ * Lexicographic tier index (higher beats lower).
+ * Order: high-card (one-suite-1), one-suite-2, ace-pair, one-suite-3, triplet,
+ * one-suite-4, quadruplet — while `figure` on the wire stays `"one-suite"` /
+ * `"high-card"` for display.
+ */
+export function handScoreTier(h: HandScore): number {
+  switch (h.figure) {
+    case "high-card":
+      return 0;
+    case "one-suite": {
+      const s = h.suiteSize;
+      if (s === 2) return 1;
+      if (s === 3) return 3;
+      if (s === 4) return 5;
+      return 1;
+    }
+    case "ace-pair":
+      return 2;
+    case "triplet":
+      return 4;
+    case "quadruplet":
+      return 6;
+    default:
+      return 0;
+  }
 }
 
-function encodeHighCard(cards: Card[]): number {
-  const sorted = sortCardsForKicker(cards);
-  const pts = sorted.map(cardPoints);
-  while (pts.length < 4) pts.push(0);
-  const [a, b, c, d] = pts;
-  const rs = sorted.map((x) => rankStrength(x.rank));
-  const [ra, rb, rc, rd] = [
-    rs[0] ?? 0,
-    rs[1] ?? 0,
-    rs[2] ?? 0,
-    rs[3] ?? 0,
-  ];
-  return (
-    10_000_000 +
-    a * 100_000 +
-    b * 5_000 +
-    c * 200 +
-    d * 10 +
-    ra * 7 +
-    rb * 5 +
-    rc * 3 +
-    rd
-  );
+/** Winning patterns from the same deal: compare tier then display score only. */
+function compareSameHandCandidates(a: HandScore, b: HandScore): number {
+  const ta = handScoreTier(a);
+  const tb = handScoreTier(b);
+  if (ta !== tb) return ta - tb;
+  return a.score - b.score;
+}
+
+/**
+ * Compare two hands from their cards (any length supported by `scoreHand`).
+ * Uses pattern tier then display `score` only; same tier and score returns `0`
+ * (no kicker / multiset tie-break).
+ */
+export function compareHands(a: Card[], b: Card[]): number {
+  const ha = resolveWinningHandScore(a);
+  const hb = resolveWinningHandScore(b);
+  const ta = handScoreTier(ha);
+  const tb = handScoreTier(hb);
+  if (ta !== tb) return ta - tb;
+  return ha.score - hb.score;
 }
 
 /** Three same rank on three different suits (32-card deck). */
@@ -165,7 +182,7 @@ function tripletCandidate(cards: Card[]): HandScore | null {
     byRank.set(c.rank, arr);
   }
   let best: HandScore | null = null;
-  for (const [rank, group] of byRank) {
+  for (const [_rank, group] of byRank) {
     if (group.length < 3) continue;
     const suits = new Set(group.map((c) => c.suit));
     if (suits.size < 3) continue;
@@ -179,23 +196,12 @@ function tripletCandidate(cards: Card[]): HandScore | null {
       if (pickThree.length === 3) break;
     }
     if (pickThree.length !== 3) continue;
-    const used = new Set(pickThree.map((c) => `${c.suit}:${c.rank}`));
-    const kickers = cards.filter((c) => !used.has(`${c.suit}:${c.rank}`));
-    const kickerCard =
-      kickers.length > 0 ? sortCardsForKicker(kickers)[0]! : null;
-    const rs = rankStrength(rank);
-    const kp = kickerCard ? cardPoints(kickerCard) : 0;
-    const ks = kickerCard ? suitIndex(kickerCard.suit) : 0;
-    const kr = kickerCard ? rankStrength(kickerCard.rank) : 0;
-    const strength =
-      50_000_000 + rs * 100_000 + kp * 500 + ks * 10 + kr;
     const sample = pickThree[0]!;
     const candidate: HandScore = {
       figure: "triplet",
       score: 3 * cardPoints(sample),
-      strength,
     };
-    if (!best || candidate.strength > best.strength) best = candidate;
+    if (!best || compareSameHandCandidates(candidate, best) > 0) best = candidate;
   }
   return best;
 }
@@ -208,7 +214,6 @@ function quadrupletCandidate(cards: Card[]): HandScore | null {
   return {
     figure: "quadruplet",
     score: 4 * cardPoints(sample),
-    strength: 60_000_000 + rankStrength(r0) * 100_000,
   };
 }
 
@@ -235,12 +240,10 @@ function acePairScore(cards: Card[]): number | null {
 }
 
 function acePairCandidate(cards: Card[]): HandScore | null {
-  const raw = acePairScore(cards);
-  if (raw === null) return null;
+  if (acePairScore(cards) === null) return null;
   return {
     figure: "ace-pair",
     score: 22,
-    strength: 38_000_000 + (raw - 15_000_000),
   };
 }
 
@@ -250,23 +253,16 @@ function highCardCandidate(cards: Card[]): HandScore {
   return {
     figure: "high-card",
     score: cardPoints(top),
-    strength: encodeHighCard(cards),
   };
 }
 
 /**
- * Best hand pattern and a small display `score`, plus `strength` for strict ordering.
- *
- * Ordering (highest wins first): quadruplet → triplet → one-suite (3–4 cards in a
- * suit) → ace-pair → one-suite (2 cards in a suit) → high-card.
- *
- * Display `score` by figure: high-card = highest card points; one-suite = sum of
- * that suit run; ace-pair = 22; triplet = 3× card points of the rank; quadruplet =
- * 4× card points of the rank.
+ * Best display hand for `cards`. To decide a winner between two seats, use
+ * `compareHands` on their card lists (not `HandScore` alone).
  */
-export function scoreHand(cards: Card[]): HandScore {
+function resolveWinningHandScore(cards: Card[]): HandScore {
   if (cards.length === 0) {
-    return { figure: "high-card", score: 0, strength: 0 };
+    return { figure: "high-card", score: 0 };
   }
 
   const candidates: HandScore[] = [];
@@ -282,7 +278,7 @@ export function scoreHand(cards: Card[]): HandScore {
     candidates.push({
       figure: "one-suite",
       score: suitCombo.sum,
-      strength: suiteComboStrength(suitCombo, cards),
+      suiteSize: suitCombo.count,
     });
   }
 
@@ -291,12 +287,13 @@ export function scoreHand(cards: Card[]): HandScore {
 
   candidates.push(highCardCandidate(cards));
 
-  return candidates.reduce((a, b) => (b.strength > a.strength ? b : a));
+  return candidates.reduce((a, b) =>
+    compareSameHandCandidates(b, a) > 0 ? b : a,
+  );
 }
 
-/** Positive if `a` beats `b` (same strength = tie). */
-export function compareHandScores(a: HandScore, b: HandScore): number {
-  return a.strength - b.strength;
+export function scoreHand(cards: Card[]): HandScore {
+  return resolveWinningHandScore(cards);
 }
 
 export type AnteAction = "fold" | "enter";

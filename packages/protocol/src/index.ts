@@ -1,5 +1,5 @@
 /** Wire format version for client/server compatibility. */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 10;
 
 /** Max seats at the table (humans + bots). */
 export const MAX_SEATS = 6;
@@ -34,14 +34,19 @@ export type HandFigure =
   | "quadruplet";
 
 /**
- * Comparable hand result: use `strength` for ordering; `figure` + `score` for UI.
+ * Resolved hand for display. Use `compareHands` from `@ferbli/rules` with the
+ * seat's card list to order hands: pattern tier, then display `score` (same tier
+ * and score ties).
  */
 export type HandScore = {
   figure: HandFigure;
   /** Pattern-specific value shown to players (see rules). */
   score: number;
-  /** Monotonic ordering key — higher wins; not meant for display. */
-  strength: number;
+  /**
+   * Only when `figure === "one-suite"`: how many cards form the flush run (2–4).
+   * Omitted for other figures (high-card is conceptually one suited card for ordering).
+   */
+  suiteSize?: 2 | 3 | 4;
 };
 
 export type SeatKind = "human" | "bot";
