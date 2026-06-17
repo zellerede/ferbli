@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type {
   ClientMessage,
   HandPhase,
+  HandScore,
   LobbyRoomSummary,
   PlayerHandSnapshot,
   RoomSnapshot,
@@ -35,6 +36,17 @@ function wireDataToStringSync(data: unknown): string {
     );
   }
   return String(data);
+}
+
+function formatHandScore(s: HandScore): string {
+  const label: Record<HandScore["figure"], string> = {
+    "high-card": "High card",
+    "one-suite": "One suite",
+    "ace-pair": "Ace pair",
+    triplet: "Triplet",
+    quadruplet: "Quadruplet",
+  };
+  return `${label[s.figure]} ${s.score}`;
 }
 
 function coinSeatIndices(roomState: RoomSnapshot): number[] {
@@ -247,8 +259,13 @@ function roundResultForSeat(
     };
   }
 
-  const best = Math.max(...inShowdown.map((h) => h.score!));
-  const winnerCount = inShowdown.filter((h) => h.score === best).length;
+  const best = Math.max(...inShowdown.map((h) => h.score!.strength));
+  const winnerCount = inShowdown.filter(
+    (h) => h.score!.strength === best,
+  ).length;
+  const bestHandExample = inShowdown.find(
+    (h) => h.score!.strength === best,
+  )?.score;
 
   if (!mine.inRound || mine.score === null) {
     return {
@@ -261,7 +278,7 @@ function roundResultForSeat(
   }
 
   if (potCarried) {
-    if (mine.score === best && winnerCount > 1) {
+    if (mine.score.strength === best && winnerCount > 1) {
       return {
         variant: "lose",
         title: "Tied for best",
@@ -269,7 +286,7 @@ function roundResultForSeat(
           "There is no split pot — the pot stays on the table. Everyone pays 1 coin and the same dealer runs an extra round.",
       };
     }
-    if (mine.score === best) {
+    if (mine.score.strength === best) {
       return {
         variant: "lose",
         title: "Pot carries",
@@ -280,22 +297,22 @@ function roundResultForSeat(
     return {
       variant: "lose",
       title: "Pot carries",
-      detail: `Your score was ${mine.score}; the best at the table was ${best}. The pot stays for a replay.`,
+      detail: `Your hand was ${formatHandScore(mine.score)}; the best at the table was ${bestHandExample ? formatHandScore(bestHandExample) : "unknown"}. The pot stays for a replay.`,
     };
   }
 
-  if (mine.score === best) {
+  if (mine.score.strength === best) {
     return {
       variant: "win",
       title: "You won this round",
-      detail: `Your score of ${mine.score} took the pot.`,
+      detail: `Your ${formatHandScore(mine.score)} took the pot.`,
     };
   }
 
   return {
     variant: "lose",
     title: "You lost this round",
-    detail: `Your score was ${mine.score}; the best score at the table was ${best}.`,
+    detail: `Your hand was ${formatHandScore(mine.score)}; the best at the table was ${bestHandExample ? formatHandScore(bestHandExample) : "unknown"}.`,
   };
 }
 
@@ -979,7 +996,7 @@ export function App() {
                 </div>
                 {roundAckBlocking.playerHand.score !== null ? (
                   <p className="muted" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
-                    Hand score: {roundAckBlocking.playerHand.score}
+                    Hand: {formatHandScore(roundAckBlocking.playerHand.score)}
                   </p>
                 ) : null}
               </div>

@@ -1,4 +1,4 @@
-import type { Card, Rank, Suit } from "@ferbli/protocol";
+import type { Card, HandScore, Rank, Suit } from "@ferbli/protocol";
 
 const SUITS: Suit[] = ["hearts", "bells", "leaves", "acorns"];
 const RANKS: Rank[] = [
@@ -78,25 +78,56 @@ function sortCardsForKicker(cards: Card[]): Card[] {
   });
 }
 
-function bestSameSuitSum(cards: Card[]): number {
-  const bySuit = new Map<Suit, Card[]>();
-  for (const s of SUITS) bySuit.set(s, []);
-  for (const c of cards) {
-    bySuit.get(c.suit)!.push(c);
-  }
-  let best = 0;
-  for (const [, suited] of bySuit) {
-    if (suited.length < 2) continue;
-    const values = suited.map(cardPoints).sort((a, b) => b - a);
+type SuitCombo = {
+  count: 2 | 3 | 4;
+  sum: number;
+  suitedCards: Card[];
+  suit: Suit;
+};
+
+function betterSuitCombo(next: SuitCombo, cur: SuitCombo | null): boolean {
+  if (cur === null) return true;
+  if (next.sum !== cur.sum) return next.sum > cur.sum;
+  if (next.count !== cur.count) return next.count > cur.count;
+  const rankKey = (pick: Card[]) =>
+    [...pick]
+      .sort((a, b) => rankStrength(b.rank) - rankStrength(a.rank))
+      .map((c) => rankStrength(c.rank))
+      .join(",");
+  const nk = rankKey(next.suitedCards);
+  const ck = rankKey(cur.suitedCards);
+  if (nk !== ck) return nk > ck;
+  return suitIndex(next.suit) > suitIndex(cur.suit);
+}
+
+/** Best same-suit subset (2–4 cards) by point sum, with sensible tie-breaks. */
+function bestSameSuitCombination(cards: Card[]): SuitCombo | null {
+  let best: SuitCombo | null = null;
+  for (const suit of SUITS) {
+    const suited = cards.filter((c) => c.suit === suit);
     for (const k of [4, 3, 2] as const) {
-      if (values.length >= k) {
-        let sum = 0;
-        for (let i = 0; i < k; i++) sum += values[i]!;
-        if (sum > best) best = sum;
-      }
+      if (suited.length < k) continue;
+      const sorted = sortCardsForKicker(suited);
+      const pick = sorted.slice(0, k);
+      const sum = pick.reduce((s, c) => s + cardPoints(c), 0);
+      const candidate: SuitCombo = {
+        count: k,
+        sum,
+        suitedCards: pick,
+        suit,
+      };
+      if (betterSuitCombo(candidate, best)) best = candidate;
     }
   }
   return best;
+}
+
+function suiteComboStrength(combo: SuitCombo, allCards: Card[]): number {
+  const base = combo.count >= 3 ? 40_000_000 : 30_000_000;
+  const used = new Set(combo.suitedCards.map((c) => `${c.suit}:${c.rank}`));
+  const rest = allCards.filter((c) => !used.has(`${c.suit}:${c.rank}`));
+  const kickerPart = encodeHighCard(rest);
+  return base + combo.sum * 100_000 + (kickerPart - 10_000_000);
 }
 
 function encodeHighCard(cards: Card[]): number {
@@ -124,8 +155,8 @@ function encodeHighCard(cards: Card[]): number {
   );
 }
 
-/** Best triple-by-rank: three same rank on three different suits (32-card deck). */
-function bestTripleRankScore(cards: Card[]): number | null {
+/** Three same rank on three different suits (32-card deck). */
+function tripletCandidate(cards: Card[]): HandScore | null {
   if (cards.length < 3) return null;
   const byRank = new Map<Rank, Card[]>();
   for (const c of cards) {
@@ -133,7 +164,7 @@ function bestTripleRankScore(cards: Card[]): number | null {
     arr.push(c);
     byRank.set(c.rank, arr);
   }
-  let best: number | null = null;
+  let best: HandScore | null = null;
   for (const [rank, group] of byRank) {
     if (group.length < 3) continue;
     const suits = new Set(group.map((c) => c.suit));
@@ -156,24 +187,29 @@ function bestTripleRankScore(cards: Card[]): number | null {
     const kp = kickerCard ? cardPoints(kickerCard) : 0;
     const ks = kickerCard ? suitIndex(kickerCard.suit) : 0;
     const kr = kickerCard ? rankStrength(kickerCard.rank) : 0;
-    const score =
-      40_000_000 +
-      rs * 100_000 +
-      kp * 500 +
-      ks * 10 +
-      kr;
-    if (best === null || score > best) best = score;
+    const strength =
+      50_000_000 + rs * 100_000 + kp * 500 + ks * 10 + kr;
+    const sample = pickThree[0]!;
+    const candidate: HandScore = {
+      figure: "triplet",
+      score: 3 * cardPoints(sample),
+      strength,
+    };
+    if (!best || candidate.strength > best.strength) best = candidate;
   }
   return best;
 }
 
-function quadRankScore(cards: Card[]): number | null {
+function quadrupletCandidate(cards: Card[]): HandScore | null {
   if (cards.length !== 4) return null;
   const r0 = cards[0]!.rank;
-  if (cards.every((c) => c.rank === r0)) {
-    return 50_000_000 + rankStrength(r0) * 100_000;
-  }
-  return null;
+  if (!cards.every((c) => c.rank === r0)) return null;
+  const sample = cards[0]!;
+  return {
+    figure: "quadruplet",
+    score: 4 * cardPoints(sample),
+    strength: 60_000_000 + rankStrength(r0) * 100_000,
+  };
 }
 
 function acePairScore(cards: Card[]): number | null {
@@ -198,33 +234,69 @@ function acePairScore(cards: Card[]): number | null {
   );
 }
 
+function acePairCandidate(cards: Card[]): HandScore | null {
+  const raw = acePairScore(cards);
+  if (raw === null) return null;
+  return {
+    figure: "ace-pair",
+    score: 22,
+    strength: 38_000_000 + (raw - 15_000_000),
+  };
+}
+
+function highCardCandidate(cards: Card[]): HandScore {
+  const sorted = sortCardsForKicker(cards);
+  const top = sorted[0]!;
+  return {
+    figure: "high-card",
+    score: cardPoints(top),
+    strength: encodeHighCard(cards),
+  };
+}
+
 /**
- * Comparable hand strength (higher wins).
+ * Best hand pattern and a small display `score`, plus `strength` for strict ordering.
  *
- * Tiers (see tests in score-hand.test.ts):
- * - **50M+** Four of a kind (same rank, four suits).
- * - **40M+** Three of a kind by rank on three different suits + kicker.
- * - **25M+** Best same-suit sum (2–4 cards), legacy point sums (typically 14–41).
- * - **15M+** Exactly two aces by rank + kickers (only rank-pair that counts).
- * - **10M+** High card / kickers when no higher pattern applies.
+ * Ordering (highest wins first): quadruplet → triplet → one-suite (3–4 cards in a
+ * suit) → ace-pair → one-suite (2 cards in a suit) → high-card.
+ *
+ * Display `score` by figure: high-card = highest card points; one-suite = sum of
+ * that suit run; ace-pair = 22; triplet = 3× card points of the rank; quadruplet =
+ * 4× card points of the rank.
  */
-export function scoreHand(cards: Card[]): number {
-  if (cards.length === 0) return 0;
+export function scoreHand(cards: Card[]): HandScore {
+  if (cards.length === 0) {
+    return { figure: "high-card", score: 0, strength: 0 };
+  }
 
-  const quad = quadRankScore(cards);
-  if (quad !== null) return quad;
+  const candidates: HandScore[] = [];
 
-  const tripleRank = bestTripleRankScore(cards);
-  const suitSum = bestSameSuitSum(cards);
-  const suitTier = suitSum > 0 ? 25_000_000 + suitSum : 0;
+  const quad = quadrupletCandidate(cards);
+  if (quad) candidates.push(quad);
 
-  if (tripleRank !== null && tripleRank > suitTier) return tripleRank;
-  if (suitTier > 0) return suitTier;
+  const trip = tripletCandidate(cards);
+  if (trip) candidates.push(trip);
 
-  const aces = acePairScore(cards);
-  if (aces !== null) return aces;
+  const suitCombo = bestSameSuitCombination(cards);
+  if (suitCombo) {
+    candidates.push({
+      figure: "one-suite",
+      score: suitCombo.sum,
+      strength: suiteComboStrength(suitCombo, cards),
+    });
+  }
 
-  return encodeHighCard(cards);
+  const aces = acePairCandidate(cards);
+  if (aces) candidates.push(aces);
+
+  candidates.push(highCardCandidate(cards));
+
+  return candidates.reduce((a, b) => (b.strength > a.strength ? b : a));
+}
+
+/** Positive if `a` beats `b` (same strength = tie). */
+export function compareHandScores(a: HandScore, b: HandScore): number {
+  return a.strength - b.strength;
 }
 
 export type AnteAction = "fold" | "enter";

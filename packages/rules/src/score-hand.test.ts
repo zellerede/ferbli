@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Card } from "@ferbli/protocol";
-import { scoreHand } from "./index.js";
+import { compareHandScores, scoreHand } from "./index.js";
 
 function card(suit: Card["suit"], rank: Card["rank"]): Card {
   return { suit, rank };
+}
+
+function beats(a: Card[], b: Card[]): boolean {
+  return compareHandScores(scoreHand(a), scoreHand(b)) > 0;
 }
 
 describe("scoreHand", () => {
@@ -16,7 +20,11 @@ describe("scoreHand", () => {
         card("leaves", "nine"),
         card("acorns", "seven"),
       ];
-      assert.equal(scoreHand(hand), 11_151_971);
+      assert.deepEqual(scoreHand(hand), {
+        figure: "high-card",
+        score: 11,
+        strength: 11_151_971,
+      });
     });
 
     it("king high when ace is absent", () => {
@@ -26,17 +34,25 @@ describe("scoreHand", () => {
         card("leaves", "nine"),
         card("acorns", "seven"),
       ];
-      assert.equal(scoreHand(hand), 11_051_949);
+      assert.deepEqual(scoreHand(hand), {
+        figure: "high-card",
+        score: 10,
+        strength: 11_051_949,
+      });
     });
 
-    it("four sevens, one per suit: four of a kind (beats high card)", () => {
+    it("four sevens, one per suit: quadruplet (beats high card)", () => {
       const hand: Card[] = [
         card("hearts", "seven"),
         card("bells", "seven"),
         card("leaves", "seven"),
         card("acorns", "seven"),
       ];
-      assert.equal(scoreHand(hand), 50_100_000);
+      assert.deepEqual(scoreHand(hand), {
+        figure: "quadruplet",
+        score: 28,
+        strength: 60_100_000,
+      });
     });
 
     it("nine high when that beats sevens and eight", () => {
@@ -46,11 +62,15 @@ describe("scoreHand", () => {
         card("leaves", "nine"),
         card("acorns", "seven"),
       ];
-      assert.equal(scoreHand(hand), 10_941_505);
+      assert.deepEqual(scoreHand(hand), {
+        figure: "high-card",
+        score: 9,
+        strength: 10_941_505,
+      });
     });
   });
 
-  describe("four cards, same-suit combinations (25M tier)", () => {
+  describe("same-suit combinations (one-suite)", () => {
     it("three of one suit + off-suit: best triple (README-style)", () => {
       const hand: Card[] = [
         card("hearts", "ace"),
@@ -58,7 +78,11 @@ describe("scoreHand", () => {
         card("hearts", "nine"),
         card("bells", "seven"),
       ];
-      assert.equal(scoreHand(hand), 25_000_030);
+      assert.deepEqual(scoreHand(hand), {
+        figure: "one-suite",
+        score: 30,
+        strength: 43_700_007,
+      });
     });
 
     it("four of one suit: sum of all four point values", () => {
@@ -68,7 +92,11 @@ describe("scoreHand", () => {
         card("hearts", "ten"),
         card("hearts", "nine"),
       ];
-      assert.equal(scoreHand(hand), 25_000_000 + (11 + 10 + 10 + 9));
+      assert.deepEqual(scoreHand(hand), {
+        figure: "one-suite",
+        score: 40,
+        strength: 44_000_000,
+      });
     });
 
     it("two + two by suit: pick the better pair sum", () => {
@@ -78,7 +106,11 @@ describe("scoreHand", () => {
         card("bells", "king"),
         card("bells", "ten"),
       ];
-      assert.equal(scoreHand(hand), 25_000_020);
+      assert.deepEqual(scoreHand(hand), {
+        figure: "one-suite",
+        score: 20,
+        strength: 33_135_061,
+      });
     });
 
     it("exactly two sharing a suit: only that pair counts", () => {
@@ -88,12 +120,16 @@ describe("scoreHand", () => {
         card("bells", "ace"),
         card("leaves", "king"),
       ];
-      assert.equal(scoreHand(hand), 25_000_020);
+      assert.deepEqual(scoreHand(hand), {
+        figure: "one-suite",
+        score: 20,
+        strength: 33_150_091,
+      });
     });
   });
 
   describe("rank-based patterns", () => {
-    it("four of a kind beats any same-suit combination", () => {
+    it("quadruplet beats any same-suit combination", () => {
       const quad = [
         card("hearts", "seven"),
         card("bells", "seven"),
@@ -106,10 +142,10 @@ describe("scoreHand", () => {
         card("hearts", "nine"),
         card("bells", "seven"),
       ];
-      assert.ok(scoreHand(quad) > scoreHand(suitBest));
+      assert.ok(beats(quad, suitBest));
     });
 
-    it("three same rank on three suits beats same-suit triple of equal point sum", () => {
+    it("triplet beats same-suit triple of equal point sum", () => {
       const tripleRank = [
         card("hearts", "king"),
         card("bells", "king"),
@@ -122,10 +158,10 @@ describe("scoreHand", () => {
         card("hearts", "nine"),
         card("bells", "seven"),
       ];
-      assert.ok(scoreHand(tripleRank) > scoreHand(suitTriple));
+      assert.ok(beats(tripleRank, suitTriple));
     });
 
-    it("three same rank on three suits beats four-suit high card", () => {
+    it("triplet beats four-suit high card", () => {
       const tripleRank = [
         card("hearts", "ten"),
         card("bells", "ten"),
@@ -138,10 +174,10 @@ describe("scoreHand", () => {
         card("leaves", "nine"),
         card("acorns", "seven"),
       ];
-      assert.ok(scoreHand(tripleRank) > scoreHand(highOnly));
+      assert.ok(beats(tripleRank, highOnly));
     });
 
-    it("four of a kind beats three-of-a-kind by rank", () => {
+    it("quadruplet beats triplet by rank", () => {
       const quad = [
         card("hearts", "seven"),
         card("bells", "seven"),
@@ -154,10 +190,10 @@ describe("scoreHand", () => {
         card("leaves", "king"),
         card("acorns", "nine"),
       ];
-      assert.ok(scoreHand(quad) > scoreHand(triple));
+      assert.ok(beats(quad, triple));
     });
 
-    it("pair of aces (two aces by rank) beats king-high four suits", () => {
+    it("ace-pair beats king-high four suits", () => {
       const aces = [
         card("hearts", "ace"),
         card("bells", "ace"),
@@ -170,10 +206,10 @@ describe("scoreHand", () => {
         card("leaves", "nine"),
         card("acorns", "seven"),
       ];
-      assert.ok(scoreHand(aces) > scoreHand(kingHigh));
+      assert.ok(beats(aces, kingHigh));
     });
 
-    it("pair of aces loses to any scored same-suit pair or better", () => {
+    it("ace-pair beats any two-card one-suite", () => {
       const aces = [
         card("hearts", "ace"),
         card("bells", "ace"),
@@ -186,26 +222,50 @@ describe("scoreHand", () => {
         card("bells", "king"),
         card("leaves", "nine"),
       ];
-      assert.ok(scoreHand(suitPair) > scoreHand(aces));
+      assert.ok(beats(aces, suitPair));
+    });
+
+    it("ace-pair loses to three-card one-suite or better", () => {
+      const aces = [
+        card("hearts", "ace"),
+        card("bells", "ace"),
+        card("leaves", "king"),
+        card("acorns", "nine"),
+      ];
+      const suitTriple = [
+        card("hearts", "ace"),
+        card("hearts", "king"),
+        card("hearts", "nine"),
+        card("bells", "seven"),
+      ];
+      assert.ok(beats(suitTriple, aces));
     });
   });
 
   describe("(hypothetical) fewer than four cards", () => {
-    it("two cards, different suits: best single card encoded", () => {
-      assert.equal(
+    it("two cards, different suits: high-card is higher point value", () => {
+      assert.deepEqual(
         scoreHand([card("hearts", "nine"), card("bells", "king")]),
-        11_045_064,
+        {
+          figure: "high-card",
+          score: 10,
+          strength: 11_045_064,
+        },
       );
     });
 
-    it("three cards, three suits: best single card encoded", () => {
-      assert.equal(
+    it("three cards, three suits: ace high", () => {
+      assert.deepEqual(
         scoreHand([
           card("hearts", "ace"),
           card("bells", "king"),
           card("leaves", "ten"),
         ]),
-        11_152_103,
+        {
+          figure: "high-card",
+          score: 11,
+          strength: 11_152_103,
+        },
       );
     });
   });
