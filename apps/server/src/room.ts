@@ -768,7 +768,8 @@ export class Room {
     }
     this.showdownHands = revealSnapshots;
 
-    const contenders: { seat: number; score: number }[] = [];
+    const contenders: { seat: number; score: ReturnType<typeof scoreHand> }[] =
+      [];
     for (const seat of hand.handSeats) {
       const sc = hand.cards.get(seat);
       if (!sc || !sc.inRound) continue;
@@ -787,8 +788,8 @@ export class Room {
       return;
     }
 
-    const best = Math.max(...contenders.map((c) => c.score));
-    const winners = contenders.filter((c) => c.score === best);
+    const best = Math.max(...contenders.map((c) => c.score.strength));
+    const winners = contenders.filter((c) => c.score.strength === best);
     const tieShowdown = winners.length > 1;
 
     const onlyBlindSurvives =

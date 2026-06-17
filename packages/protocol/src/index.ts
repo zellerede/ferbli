@@ -1,5 +1,5 @@
 /** Wire format version for client/server compatibility. */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /** Max seats at the table (humans + bots). */
 export const MAX_SEATS = 6;
@@ -23,6 +23,25 @@ export type Rank =
 export type Card = {
   suit: Suit;
   rank: Rank;
+};
+
+/** Recognized scoring pattern for a four-card (or partial) hand. */
+export type HandFigure =
+  | "high-card"
+  | "one-suite"
+  | "ace-pair"
+  | "triplet"
+  | "quadruplet";
+
+/**
+ * Comparable hand result: use `strength` for ordering; `figure` + `score` for UI.
+ */
+export type HandScore = {
+  figure: HandFigure;
+  /** Pattern-specific value shown to players (see rules). */
+  score: number;
+  /** Monotonic ordering key — higher wins; not meant for display. */
+  strength: number;
 };
 
 export type SeatKind = "human" | "bot";
@@ -58,7 +77,7 @@ export type PlayerHandSnapshot = {
   /** During ante: true if folded; false while deciding or after entering (see also inRound). */
   foldedAnte?: boolean;
   /** Shown after showdown for in-round players. */
-  score: number | null;
+  score: HandScore | null;
 };
 
 /** One row for the lobby browser (open rooms). */
